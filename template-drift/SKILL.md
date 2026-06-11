@@ -1,0 +1,225 @@
+---
+name: template-drift
+description: Detect drift between this project's `.adlc/templates/` copies and the canonical templates in `~/.claude/skills/templates/`, and between `.adlc/partials/*.sh` and `~/.claude/skills/partials/*.sh`. Use when the user says "check template drift", "template drift", "are my templates out of date", or wants to know whether toolkit template or partial updates have landed in this project yet. Reports a per-file diff summary, flags intentional customizations from accidental staleness for templates, and reports any partial drift as `stale` (partials are shared executable code — no customization classification). Also flags stale `node:test`/`*.test.js` files left under `.adlc/workflows/` by an older `/init` (a Jest landmine in `"type":"module"` repos).
+argument-hint: Optional template name (e.g., "requirement-template") to scope the check to a single file
+---
+
+# /template-drift — Template Drift Detector
+
+You are checking whether the project's local `.adlc/templates/` copies still match the canonical templates in the adlc-toolkit. Templates are copied per-repo (not symlinked like skills/agents), so they drift over time. Some drift is **intentional** (project-specific customization); some is **accidental** (toolkit updated and the project never pulled the change). This skill surfaces both and helps you decide what to reconcile.
+
+## Ethos
+
+!`sh .adlc/partials/ethos-include.sh 2>/dev/null || sh ~/.claude/skills/partials/ethos-include.sh`
+
+## Context
+
+- Project templates dir: !`ls .adlc/templates/ 2>/dev/null || echo "No .adlc/templates/ directory — run /init first"`
+- Toolkit templates dir: !`ls ~/.claude/skills/templates/ 2>/dev/null || echo "Toolkit templates not found at ~/.claude/skills/templates/"`
+- Current directory: !`pwd`
+
+## Input
+
+Scope: $ARGUMENTS (optional — single template name to check; otherwise all templates)
+
+## Prerequisites
+
+1. `.adlc/templates/` must exist in the current project. If it does not, stop and tell the user: "This project has no local templates — it uses toolkit templates directly. No drift to check." (New projects per the `/init` Step 6 policy don't copy templates locally.)
+2. `~/.claude/skills/templates/` must resolve through the symlink. If it does not, stop and tell the user: "The adlc-toolkit symlink is broken. Verify `readlink ~/.claude/skills` points to the toolkit repo."
+
+## Instructions
+
+### Step 1: Enumerate Templates to Compare
+
+1. If the user passed a scope argument (e.g. `requirement-template`), only check `.adlc/templates/<scope>.md` vs `~/.claude/skills/templates/<scope>.md`.
+2. Otherwise list every `*.md` file in `.adlc/templates/` AND every `*.md` file in `~/.claude/skills/templates/`. Compare the union of both sets — this catches templates that exist in the toolkit but not in the project (new templates added upstream) and templates in the project but not in the toolkit (legacy or custom-to-project files).
+
+### Step 2: Detect Template Drift
+
+For each template in the comparison set, run `diff -u ~/.claude/skills/templates/<name>.md .adlc/templates/<name>.md`. Capture:
+- **Missing upstream**: template exists locally but not in toolkit (legacy or custom)
+- **Missing locally** (a.k.a. `missing`): template exists in toolkit but not in project (upstream added, not yet copied)
+- **Identical** (a.k.a. `synced`): no diff (drift = 0)
+- **Drifted** (a.k.a. `stale`): diff output — count added/removed lines
+
+Also compute a rough drift size: total lines added + total lines removed (excluding context lines). This gives a "how much has changed" number for the summary table.
+
+### Step 3: Detect Partial Drift
+
+Partials (`*.sh` files) are a second sync surface alongside templates. Unlike templates, partials are copied per-repo for portability but are **not** intended for project-specific customization — they are shared executable code (e.g., `ethos-include.sh` injects the toolkit's ETHOS preamble into every skill). The classification vocabulary matches Step 2 (`synced`, `stale`, `missing`) so the final report can use one unified summary line.
+
+**Rationale — why no "intentional customization" classification for partials**:
+
+Partials are shared executable code, not customizable content; intentional consumer-side modification of a partial would shadow the toolkit's gate logic and is the threat model `/template-drift` is meant to detect. Therefore any drift in partials is reported as `stale` with no customization classification. This is a security posture: a consumer with a modified `ethos-include.sh` could silently strip the ETHOS preamble from every skill invocation, and a consumer with a modified gate partial could bypass ADLC phase gates. Treating every partial diff as `stale` (and surfacing it loudly) is the correct default.
+
+For each `*.sh` file in `~/.claude/skills/partials/` (use a POSIX-safe glob — guard with `[ -e "$f" ]` so that an empty toolkit partials directory does not iterate the literal pattern), compare against `.adlc/partials/<basename>`:
+
+- Run `diff -q .adlc/partials/<basename> ~/.claude/skills/partials/<basename>`.
+- Exit 0 → `synced` (both exist, identical)
+- Exit 1 → `stale` (both exist, content differs)
+- Consumer file absent (`.adlc/partials/<basename>` does not exist) → `missing` (toolkit has it, consumer doesn't — consumer needs to re-run `/init` to copy it down)
+
+Also check the reverse direction: any `*.sh` in `.adlc/partials/` that does NOT exist in `~/.claude/skills/partials/` should be reported as `missing upstream` (legacy or rogue partial — flag it; do not auto-delete).
+
+If `.adlc/partials/` does not exist at all in the consumer project, report every toolkit partial as `missing` and recommend running `/init`.
+
+### Step 3a: Detect Stale Salesforce Quality Checklist
+
+`partials/sf-quality-checklist.md` is the always-on baseline that the implementer and review panel source. It is generated from `.adlc/context/salesforce-rules.md` (the source of truth). Drift between the two is a posture risk — the linter and the agents read the partial; if it's stale relative to the rules document, an enforced rule may not actually be enforced.
+
+For consumer projects:
+
+- If `.adlc/partials/sf-quality-checklist.md` exists, treat it as a partial drift candidate per Step 3 (any drift is `stale` — partials have no customization classification).
+- If `.adlc/context/salesforce-rules.md` exists in the consumer but `partials/sf-quality-checklist.md` does NOT (in either consumer or toolkit), surface a one-line note that the consumer's rules document is unwired from the always-on baseline.
+
+### Step 3b: Detect Stale Workflow Test Files (Jest landmine)
+
+A third sync surface is `.adlc/workflows/`. The current `/init` policy vendors **only** the runtime files (`adlc-sprint.workflow.js` + `README.md`) and deliberately does **not** copy the toolkit's `workflows/tests/` directory. Those are `node:test` unit tests (CommonJS `require('node:test')`) for the inlined pure helpers — toolkit-internal, with no purpose in a consumer repo.
+
+An **older** `/init` did `cp -R` of the whole `workflows/` tree and left `.adlc/workflows/tests/helpers.test.js` behind. In any `"type":"module"` repo running Jest, Jest's default testMatch (`**/?(*.)+(spec|test).[jt]s?(x)`) discovers that `*.test.js`, runs it as ESM, and fails it with `ReferenceError: require is not defined` — reddening `npm test` and any CI gate. This is pure accidental staleness (never an intentional customization), so `/template-drift` flags it loudly.
+
+Scan `.adlc/` for any test file that Jest would collect:
+
+```sh
+# Any *.test.js / *.spec.js anywhere under .adlc/ is the landmine. The known
+# offender is the workflows/tests/ tree from an older `cp -R` /init.
+find .adlc -type f \( -name '*.test.js' -o -name '*.spec.js' \) 2>/dev/null
+# Also surface a lingering tests/ dir (may also hold _load-pure.js, a .md, etc.):
+[ -d .adlc/workflows/tests ] && echo ".adlc/workflows/tests/ present (stale — remove)"
+```
+
+Classification is always **stale** — there is no "intentional customization" path here (same posture as partials in Step 3: this is toolkit-internal code a consumer should never carry). Each hit is reported in Step 5 and offered for removal in Step 6. If there are no hits, report `.adlc/` workflow test files as `clean` (one line) and move on.
+
+### Step 4: Classify Template Drift as Intentional vs Accidental
+
+(This step applies to templates only — partials have no customization classification, per Step 3.)
+
+
+For each drifted template, **read both full versions** (not just the diff) and make a judgment call. The goal is to separate:
+
+**Intentional customization signals** (do NOT reconcile without explicit user consent):
+- Added sections that are domain-specific to this project (e.g. `## System Model`, `## Entities`, `## Permissions`, `## Business Rules` added to a project's local `.adlc/templates/requirement-template.md`)
+- Added field names in frontmatter that reference project-specific concepts
+- Rewritten wording that reflects a deliberate editorial choice
+- Any change that appears in `git log` with a commit message indicating project-specific intent
+
+**Accidental staleness signals** (SHOULD reconcile):
+- Toolkit added a new section or field and the project's copy is structurally older
+- Cosmetic-only differences (whitespace, placeholder text like `YYYY-MM-DD` vs `[date]`)
+- Toolkit renamed/removed a section that the project still has dangling
+- Toolkit tightened a rule (e.g. locking a naming convention) and the project's copy still shows the old rule
+
+When in doubt, classify as "needs human review" — do not silently reconcile.
+
+### Step 5: Produce the Drift Report
+
+Emit a summary table, then per-file detail. The report covers BOTH surfaces (templates and partials) — templates classify drift as intentional/accidental; partials classify drift only as `synced`/`stale`/`missing`.
+
+```
+## Template Drift Report — [date]
+
+Project: <repo name>
+Toolkit ref: <`git -C "$(readlink ~/.claude/skills)" rev-parse --short HEAD`>
+
+| Template | Status | Drift | Classification |
+|---|---|---|---|
+| requirement-template.md | Drifted | +42 / -8 | Intentional (System Model, Entities) |
+| task-template.md | Drifted | +3 / -1 | Accidental (cosmetic) |
+| bug-template.md | Identical | — | — |
+| assumption-template.md | Missing locally | — | Upstream added — needs copy |
+| lesson-template.md | Drifted | +6 / -0 | Accidental (upstream added filename lock comment) |
+
+Overall: 3 drifted, 1 missing locally, 1 identical.
+Intentional: 1. Accidental: 2. Missing: 1.
+
+| Partial | Status |
+|---|---|
+| ethos-include.sh | stale |
+| gate-check.sh | synced |
+| spec-gate.sh | missing |
+
+Partials overall: 1 stale, 1 synced, 1 missing. (No customization classification — every partial drift is `stale` by design; see Step 3 rationale.)
+
+Workflow test files (.adlc/workflows/): 1 stale — `.adlc/workflows/tests/` (Jest landmine: `*.test.js` under .adlc/ breaks `npm test` in "type":"module" repos; remove). (Show `clean` when none found.)
+```
+
+Then, for each non-identical template, write a short per-file section:
+
+```
+### requirement-template.md — Intentional
+
+Project has these sections that the toolkit does not:
+- `## System Model` (lines 34–52)
+- `## Entities` (lines 54–71)
+- `## Permissions` (lines 73–80)
+- `## Business Rules` (lines 82–95)
+
+These are project-specific. Do NOT overwrite. No action needed.
+
+Toolkit changes the project is missing (if any):
+- <list any upstream changes not yet in the project's copy>
+```
+
+```
+### task-template.md — Accidental (cosmetic)
+
+Diff is 3 added / 1 removed lines, all whitespace and one field rename:
+- `status: [status]` → `status: pending`
+- Extra blank line after frontmatter
+
+Action: safe to sync from toolkit. Propose a one-line change: copy `~/.claude/skills/templates/task-template.md` over `.adlc/templates/task-template.md`.
+```
+
+### Step 6: Offer Reconciliation Actions
+
+For each **accidental** template drift, each **missing locally** template, **every** `stale` or `missing` partial (no customization escape hatch for partials — see Step 3), and **every** stale workflow test file from Step 3b, offer the user a specific action they can take. Format as a numbered list so the user can approve selectively:
+
+```
+## Proposed Actions
+
+1. **task-template.md**: Copy from toolkit to project (accidental cosmetic drift).
+   Command: `cp ~/.claude/skills/templates/task-template.md .adlc/templates/task-template.md`
+
+2. **lesson-template.md**: Copy from toolkit to project (toolkit added filename-lock comment).
+   Command: `cp ~/.claude/skills/templates/lesson-template.md .adlc/templates/lesson-template.md`
+
+3. **assumption-template.md**: Copy from toolkit to project (upstream added, not yet in project).
+   Command: `cp ~/.claude/skills/templates/assumption-template.md .adlc/templates/assumption-template.md`
+
+4. **ethos-include.sh** (partial, stale): Copy from toolkit to project. Partials have no customization classification — any drift is reported as `stale` (see Step 3 rationale).
+   Command: `cp ~/.claude/skills/partials/ethos-include.sh .adlc/partials/ethos-include.sh`
+
+5. **spec-gate.sh** (partial, missing): Copy from toolkit to project.
+   Command: `mkdir -p .adlc/partials && cp ~/.claude/skills/partials/spec-gate.sh .adlc/partials/spec-gate.sh`
+
+6. **.adlc/workflows/tests/** (stale workflow tests, Jest landmine): Remove. These are toolkit-internal `node:test` files that break `npm test` in `"type":"module"` repos; the runtime never needs them. Re-running `/init` also removes them.
+   Command: `rm -rf .adlc/workflows/tests`
+
+Reply with action numbers to apply (e.g. "1 2 3" or "all"), or "skip" to take no action.
+```
+
+**Do not apply any changes without explicit user approval.** Writing to `.adlc/templates/` affects how future `/spec`, `/architect`, and `/bugfix` runs behave, so it's a deliberate choice. Writing to `.adlc/partials/` affects gate logic and the ETHOS preamble injected into every skill — also deliberate. If the user approves, apply only the numbered actions they listed and re-run Step 2 (templates) and Step 3 (partials) for those files to confirm drift is now zero.
+
+For **intentional** template drift, do not propose reconciliation — just note it in the report so the user is aware. Partials have no "intentional" path: every partial drift is offered for reconciliation.
+
+### Step 7: Recommend Follow-Up
+
+At the end of the report:
+- If all drift is intentional and reconciled: "All templates are in sync or intentionally customized. No action needed."
+- If drift remains after user-approved actions: list what's still drifted and suggest running `/template-drift` again after a toolkit update.
+- If intentional customizations were found: remind the user to update their project CLAUDE.md or a project-local NOTES file so future toolkit-template updates don't accidentally overwrite them during a merge.
+
+## What This Skill Does NOT Do
+
+- It does not modify toolkit templates — changes to the canonical version go through the adlc-toolkit repo via PR.
+- It does not rename or delete project template files — only copies or reports.
+- It does not touch `.adlc/templates/` in other projects — it's scoped to the current working directory.
+- It does not check drift of skills or agents — those are symlinked, so drift is structurally impossible.
+
+## Implementation Notes
+
+- Use `diff -u` for readable unified diffs. Fall back to `git diff --no-index` if preferred.
+- `wc -l` on the diff output is a decent proxy for drift size, but prefer counting `^+` and `^-` lines excluding the `+++`/`---` headers.
+- When running under `/status`, this skill should produce a one-line summary only (e.g. "Templates: 2 drifted, 1 missing. Partials: 1 stale, 0 missing. Workflow tests: 1 stale (Jest landmine).") rather than the full report. Detect that case by checking whether `$ARGUMENTS` contains `--brief`. Omit the "Workflow tests" clause when none are found.
+- Partial comparison uses `diff -q` (quiet, exit-code-only) rather than `diff -u` because per-file unified diffs are not actionable for partials — the only remediation is "copy from toolkit". Show the diff only if the user asks for `--verbose`.
+- Do not invoke `/template-drift` recursively against the adlc-toolkit's own `.adlc/` (would always report drift against itself by construction).

@@ -1,0 +1,871 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ADLC Sprint Dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161a22;
+    --panel-2: #1d222c;
+    --border: #262c38;
+    --fg: #e6e9ef;
+    --muted: #8b94a7;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --info: #60a5fa;
+    --done: #34d399;
+    --running: #60a5fa;
+    --blocked: #fbbf24;
+    --failed: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  header {
+    padding: 12px 18px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap;
+    row-gap: 8px; background: var(--panel);
+    position: sticky; top: 0; z-index: 10;
+  }
+  /* Two header groups so flex-wrap behaves predictably and the right-aligned
+     controls stay together when the row wraps. .header-left holds the title,
+     project picker, and path; .header-right holds refresh + clock + conn.
+     Each group is a flex container that wraps internally on narrow widths. */
+  header .header-left, header .header-right {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    min-width: 0;
+  }
+  header .header-left { flex: 1 1 360px; min-width: 0; }
+  header .header-right { flex: 0 1 auto; margin-left: auto; }
+  header h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.2px; white-space: nowrap; }
+  header .meta { color: var(--muted); font-size: 12px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0; flex: 1 1 0; }
+  header .project-picker { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  header .project-picker label { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  header .project-picker select {
+    background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 26px 4px 10px; font-size: 12px;
+    font: inherit; font-size: 12px;
+    cursor: pointer; outline: none;
+    /* Allow the picker to shrink with the viewport instead of forcing
+       the rest of the header off-screen. min-width:0 lets flexbox honor
+       the shrink; max-width caps it on roomy viewports. */
+    min-width: 0; flex: 0 1 280px; max-width: 280px;
+    text-overflow: ellipsis;
+    appearance: none; -webkit-appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                      linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 14px) center, calc(100% - 9px) center;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+  }
+  header .project-picker select:hover { border-color: rgba(96,165,250,0.45); color: var(--fg); }
+  header .project-picker select:focus { border-color: rgba(96,165,250,0.60); }
+  header .refresh {
+    background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 12px;
+    cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  header .refresh:hover { color: var(--fg); border-color: rgba(96,165,250,0.45); }
+  header .refresh:active { background: var(--bg); }
+  header .refresh:disabled { opacity: 0.5; cursor: progress; }
+  header .refresh .spin { display: inline-block; transform-origin: center; }
+  header .refresh.loading .spin { animation: spin 0.8s linear infinite; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  header .conn { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  header .meta-right { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  header .conn.live::before {
+    content: ""; display: inline-block; width: 7px; height: 7px;
+    border-radius: 50%; background: var(--ok); margin-right: 6px;
+    box-shadow: 0 0 6px var(--ok);
+  }
+  header .conn.dead::before {
+    content: ""; display: inline-block; width: 7px; height: 7px;
+    border-radius: 50%; background: var(--bad); margin-right: 6px;
+  }
+  /* Tablet / narrow desktop: drop the long root path before it forces a wrap. */
+  @media (max-width: 900px) {
+    header .meta { display: none; }
+  }
+  /* Phone-ish: stack the right-side controls on their own row, drop the
+     refresh-button label, and shrink h1 + dropdown so everything fits. */
+  @media (max-width: 640px) {
+    header { padding: 10px 12px; gap: 8px 10px; }
+    header h1 { font-size: 14px; }
+    header .header-right { margin-left: 0; width: 100%; justify-content: flex-end; }
+    header .project-picker select { flex: 1 1 100%; max-width: none; }
+    header .refresh-label { display: none; }       /* Keep the spinner glyph; lose the word "Refresh". */
+    header .meta-right { display: none; }          /* "updated HH:MM:SS" is redundant with the conn pill on phones. */
+  }
+  main { padding: 18px; display: grid; gap: 14px; }
+  .empty {
+    color: var(--muted); padding: 40px; text-align: center; border: 1px dashed var(--border);
+    border-radius: 8px;
+  }
+  .req {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    overflow: hidden;
+  }
+  .req.is-stalled {
+    border-color: rgba(248,113,113,0.45);
+    box-shadow: 0 0 0 1px rgba(248,113,113,0.15);
+  }
+  .req-head {
+    display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .req-id {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600;
+    background: var(--panel-2); padding: 2px 8px; border-radius: 4px; font-size: 12px;
+  }
+  .req-title { color: var(--fg); }
+  .req-title.muted { color: var(--muted); }
+  .pill {
+    margin-left: auto; padding: 2px 9px; border-radius: 999px; font-size: 11px;
+    font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase;
+  }
+  .pill.running { background: rgba(96,165,250,0.15); color: var(--running); }
+  .pill.blocked { background: rgba(251,191,36,0.18); color: var(--blocked); }
+  .pill.failed  { background: rgba(248,113,113,0.18); color: var(--failed); }
+  .pill.merged  { background: rgba(52,211,153,0.18); color: var(--done); }
+  .pill.idle    { background: rgba(139,148,167,0.18); color: var(--muted); }
+  .pill.stale   { background: rgba(167,139,250,0.18); color: #c4b5fd; cursor: help; }
+  .pill.waiting {
+    background: rgba(251,191,36,0.18); color: var(--warn);
+    animation: pulse-warn 2s ease-in-out infinite;
+  }
+  .pill.userwait { background: rgba(167,139,250,0.18); color: #c4b5fd; }
+  @keyframes pulse-warn {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(251,191,36,0.30); }
+    50%      { box-shadow: 0 0 0 4px rgba(251,191,36,0.00); }
+  }
+  .project-bar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 14px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; font-size: 12px;
+  }
+  .project-bar .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .project-bar .pill { margin-left: 0; }
+  .pill.stalled {
+    background: rgba(248,113,113,0.18); color: var(--bad);
+    margin-left: 0; cursor: help;
+    animation: pulse-bad 2s ease-in-out infinite;
+  }
+  @keyframes pulse-bad {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(248,113,113,0.30); }
+    50%      { box-shadow: 0 0 0 4px rgba(248,113,113,0.00); }
+  }
+  .stall-hint {
+    margin-top: 6px; padding: 8px 11px; border-radius: 6px;
+    background: rgba(248,113,113,0.06); border: 1px solid rgba(248,113,113,0.30);
+    color: #fecaca; font-size: 11px;
+  }
+  .stall-hint code {
+    background: rgba(0,0,0,0.30); padding: 1px 6px; border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #fecaca;
+  }
+  .req-body { padding: 12px 14px; display: grid; gap: 10px; }
+  .phase-strip { display: grid; grid-template-columns: repeat(9, 1fr); gap: 4px; }
+  /* On narrow viewports the 9-column phase strip becomes unreadable — let
+     it wrap to 2 rows of larger cells instead of squeezing into illegible
+     2-char columns. */
+  @media (max-width: 640px) {
+    .phase-strip { grid-template-columns: repeat(5, 1fr); }
+    .req-head { flex-wrap: wrap; gap: 8px; }
+    main { padding: 12px; }
+  }
+  .phase {
+    padding: 5px 6px; font-size: 10px; border-radius: 4px;
+    background: var(--panel-2); color: var(--muted); text-align: center;
+    border: 1px solid transparent;
+  }
+  .phase.done    { background: rgba(52,211,153,0.18); color: var(--done); }
+  .phase.current {
+    background: rgba(96,165,250,0.20); color: var(--running);
+    border-color: rgba(96,165,250,0.45);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(96,165,250,0.30); }
+    50%      { box-shadow: 0 0 0 4px rgba(96,165,250,0.00); }
+  }
+  .meta-row {
+    display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 11px;
+  }
+  .meta-row b { color: var(--fg); font-weight: 500; }
+  .blockers {
+    background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.30);
+    border-radius: 6px; padding: 9px 11px; color: #fde68a;
+  }
+  .blockers .title { font-weight: 600; margin-bottom: 4px; color: var(--warn); }
+  .blockers ul { margin: 4px 0 0 0; padding-left: 18px; }
+  .blockers li { margin: 2px 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+  .tasks { display: flex; flex-wrap: wrap; gap: 4px; }
+  .task {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px;
+    padding: 2px 6px; border-radius: 3px; background: var(--panel-2);
+    color: var(--muted); border: 1px solid transparent;
+  }
+  .task.complete { background: rgba(52,211,153,0.18); color: var(--done); }
+  .task.in_progress {
+    background: rgba(96,165,250,0.18); color: var(--running);
+    border-color: rgba(96,165,250,0.40);
+  }
+  .task.failed { background: rgba(248,113,113,0.18); color: var(--failed); }
+  .repos { display: flex; gap: 6px; flex-wrap: wrap; }
+  .repo {
+    font-size: 11px; padding: 2px 6px; border-radius: 3px;
+    background: var(--panel-2); color: var(--muted);
+  }
+  .repo.merged { background: rgba(52,211,153,0.18); color: var(--done); }
+  .repo a { color: inherit; text-decoration: underline; text-decoration-color: rgba(255,255,255,0.20); }
+</style>
+</head>
+<body>
+<header>
+  <div class="header-left">
+    <h1>ADLC Sprint Dashboard</h1>
+    <div class="project-picker" id="picker" hidden>
+      <label for="project-select">Project</label>
+      <select id="project-select"></select>
+    </div>
+    <span class="meta" id="root-path" title="">…</span>
+  </div>
+  <div class="header-right">
+    <button class="refresh" id="refresh" type="button" title="Force refresh from /api/state. Auto-refresh runs every ~1.5s via SSE.">
+      <span class="spin">⟳</span><span class="refresh-label"> Refresh</span>
+    </button>
+    <span class="meta-right" id="last-updated"></span>
+    <span class="conn dead" id="conn">connecting</span>
+  </div>
+</header>
+<main id="main">
+  <div class="empty">Waiting for state…</div>
+</main>
+<script>
+  const main = document.getElementById('main');
+  const conn = document.getElementById('conn');
+  const rootPathEl = document.getElementById('root-path');
+  const pickerEl = document.getElementById('picker');
+  const selectEl = document.getElementById('project-select');
+  const refreshBtn = document.getElementById('refresh');
+  const lastUpdatedEl = document.getElementById('last-updated');
+
+  selectEl.addEventListener('change', (e) => {
+    setSelectedProject(e.target.value || '');
+    if (window.__lastSnap) render(window.__lastSnap);
+  });
+
+  function fmtClock(d) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+
+  async function refreshNow() {
+    if (refreshBtn.disabled) return;
+    refreshBtn.disabled = true;
+    refreshBtn.classList.add('loading');
+    try {
+      const res = await fetch('/api/state', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const snap = await res.json();
+      render(snap);
+    } catch (_) {
+      setConn('dead', 'fetch failed');
+    } finally {
+      refreshBtn.classList.remove('loading');
+      refreshBtn.disabled = false;
+    }
+  }
+  refreshBtn.addEventListener('click', refreshNow);
+
+  // Manual keyboard shortcut: 'r' triggers a refresh (ignored when typing in
+  // an input or pressing a modifier — Cmd/Ctrl+R is the browser reload).
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'r' && e.key !== 'R') return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    e.preventDefault();
+    refreshNow();
+  });
+
+  // Fallback if the server doesn't send phaseLabels (older server, offline JSON).
+  // Must match server.js PHASE_LABELS and proceed/SKILL.md phase headings.
+  // Phase 0 is Preflight (state init in main checkout); worktrees are created
+  // at Step 1.5 between Phase 1 and Phase 2.
+  const PHASE_DEFAULT = ['0 Preflight','1 Spec','2 Architect','3 Validate','4 Implement','5 Verify','6 PR','7 CI','8 Merge'];
+  const SELECT_KEY = 'adlc-dashboard-selected-project';
+
+  // Initial selection precedence:
+  //   1. ?project=<name> on the URL — set by launch.sh whenever a skill
+  //      opens the dashboard, so the launching repo wins focus over a
+  //      stale localStorage choice.
+  //   2. localStorage from a previous visit.
+  //   3. First project in the snapshot (handled in render()).
+  // The URL param is "sticky" — once honored, we DON'T strip it from the
+  // address bar so a manual reload keeps the same default; switching via
+  // the dropdown writes localStorage AND clears any stale URL param so
+  // future reloads honor the user's explicit choice.
+  let _urlProjectHint = '';
+  try {
+    _urlProjectHint = new URLSearchParams(window.location.search).get('project') || '';
+  } catch (_) {}
+
+  let selectedProject = _urlProjectHint || (() => {
+    try { return localStorage.getItem(SELECT_KEY) || ''; } catch (_) { return ''; }
+  })();
+  function setSelectedProject(name) {
+    selectedProject = name;
+    try { localStorage.setItem(SELECT_KEY, name); } catch (_) {}
+    // Once the user has explicitly chosen a project, drop ?project= from
+    // the URL — without this, a reload after switching would snap back
+    // to the launch.sh default. Use replaceState so we don't pollute
+    // browser history.
+    if (_urlProjectHint && name && name !== _urlProjectHint) {
+      _urlProjectHint = '';
+      try {
+        const u = new URL(window.location.href);
+        u.searchParams.delete('project');
+        window.history.replaceState(null, '', u.toString());
+      } catch (_) {}
+    }
+  }
+
+  function fmtSpan(ms) {
+    if (!Number.isFinite(ms) || ms < 0) return '';
+    const m = Math.floor(ms / 60000);
+    if (m < 1) return '<1m';
+    if (m < 60) return m + 'm';
+    const h = Math.floor(m / 60);
+    const rem = m % 60;
+    if (h < 24) return rem ? `${h}h ${rem}m` : `${h}h`;
+    const d = Math.floor(h / 24);
+    const hRem = h % 24;
+    return hRem ? `${d}d ${hRem}h` : `${d}d`;
+  }
+
+  function fmtDuration(iso) {
+    if (!iso) return '';
+    const start = new Date(iso).getTime();
+    if (Number.isNaN(start)) return '';
+    return fmtSpan(Date.now() - start);
+  }
+
+  function fmtSince(iso) { return fmtDuration(iso); }
+
+  function fmtBetween(startIso, endIso) {
+    if (!startIso || !endIso) return '';
+    const a = new Date(startIso).getTime();
+    const b = new Date(endIso).getTime();
+    if (Number.isNaN(a) || Number.isNaN(b)) return '';
+    return fmtSpan(b - a);
+  }
+
+  // fmtSec — like fmtSpan but accepts seconds. Used for user-wait totals
+  // which the server emits as integer seconds. Returns '0s' (not '<1m')
+  // for sub-minute values so per-REQ counters don't visually jump
+  // straight from blank to "<1m" on the first turn boundary.
+  function fmtSec(sec) {
+    if (!Number.isFinite(sec) || sec <= 0) return '0s';
+    if (sec < 60) return sec + 's';
+    return fmtSpan(sec * 1000);
+  }
+
+  function statePill(req) {
+    if (req.completed) return { cls: 'merged', label: 'merged' };
+    if (req.stale) return { cls: 'stale', label: 'stale' };
+    if (req.blockers && req.blockers.length) return { cls: 'blocked', label: 'blocked' };
+    if (req.failedTasks && req.failedTasks.length) return { cls: 'failed', label: 'failed' };
+    if (!req.hasState) return { cls: 'idle', label: 'spec only' };
+    return { cls: 'running', label: 'running' };
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    })[c]);
+  }
+
+  function renderPhases(req, labels) {
+    const cells = labels.map((label, i) => {
+      let cls = '';
+      if (req.completedPhases && req.completedPhases.includes(i)) cls = 'done';
+      else if (req.currentPhase === i && !req.completed) cls = 'current';
+      if (req.completed) cls = 'done';
+      return `<div class="phase ${cls}" title="Phase ${escapeHtml(label)}">${escapeHtml(label)}</div>`;
+    }).join('');
+    return `<div class="phase-strip">${cells}</div>`;
+  }
+
+  function renderTasks(req) {
+    if (!req.tasks || !req.tasks.length) return '';
+    const completed = new Set(req.completedTasks || []);
+    const failed = new Set(req.failedTasks || []);
+    const chips = req.tasks.map((t) => {
+      let status = (t.status || '').toLowerCase().replace(/\s+/g, '_');
+      if (completed.has(t.id)) {
+        // Tasks recorded in phase4.completedTasks are individually done,
+        // but green is reserved for the terminal "the whole pipeline is
+        // merged" signal. While the pipeline itself is still in flight
+        // (not req.completed), show finished tasks in blue (in_progress
+        // / shipped-but-pipeline-ongoing). Green = pipeline done end-to-end.
+        status = req.completed ? 'complete' : 'in_progress';
+      }
+      if (failed.has(t.id)) status = 'failed';
+      if (req.currentTask === t.id) status = 'in_progress';
+      const titleAttr = `${t.id}${t.title ? ' — ' + t.title : ''} (${t.status || 'unknown'})`;
+      return `<span class="task ${escapeHtml(status)}" title="${escapeHtml(titleAttr)}">${escapeHtml(t.id)}</span>`;
+    }).join('');
+    return `<div class="tasks">${chips}</div>`;
+  }
+
+  function renderRepos(req) {
+    const entries = Object.entries(req.repos || {});
+    if (!entries.length) return '';
+    const chips = entries.map(([id, r]) => {
+      const cls = r.merged ? 'merged' : '';
+      const inner = r.prUrl
+        ? `<a href="${escapeHtml(r.prUrl)}" target="_blank" rel="noopener">${escapeHtml(id)}</a>`
+        : escapeHtml(id);
+      const flag = r.primary ? ' (primary)' : '';
+      return `<span class="repo ${cls}" title="${escapeHtml(id)}${flag}${r.merged ? ' • merged' : ''}">${inner}${flag}</span>`;
+    }).join('');
+    return `<div class="repos">${chips}</div>`;
+  }
+
+  function renderBlockers(req) {
+    if (!req.blockers || !req.blockers.length) return '';
+    // Stale blockers on already-merged REQs are noise — the pipeline has
+    // shipped and the blocker description (e.g. "merge-order-dependency")
+    // is no longer actionable. Hide them so the dashboard's "Blocker"
+    // banner only signals current work that needs human attention.
+    if (req.completed) return '';
+    const items = req.blockers.map((b) => {
+      const txt = typeof b === 'string' ? b : (b.description || b.message || JSON.stringify(b));
+      return `<li>${escapeHtml(txt)}</li>`;
+    }).join('');
+    return `<div class="blockers"><div class="title">Blocker</div><ul>${items}</ul></div>`;
+  }
+
+  function renderReq(req, labels) {
+    const pill = statePill(req);
+    const phaseLine = req.hasState
+      ? `Phase <b>${escapeHtml(req.currentPhase ?? '?')}</b> / 8`
+      : `<span style="color:var(--muted)">Spec only — pipeline not started</span>`;
+
+    // Duration: wall-clock the pipeline spent on this REQ.
+    //   Live REQ:    now − startedAt (keeps ticking).
+    //   Merged REQ:  lastEnd − startedAt where lastEnd is the most recent
+    //                phase completion (or mergedAt fallback). This freezes
+    //                Duration at the moment the pipeline finished — a
+    //                REQ merged 3 days ago shouldn't read "Duration 3d 12h"
+    //                on the dashboard, it should read whatever the pipeline
+    //                actually took.
+    let durStr = '';
+    let durTitle = '';
+    if (req.startedAt) {
+      const startMs = Date.parse(req.startedAt);
+      if (Number.isFinite(startMs)) {
+        let endMs = Date.now();
+        let endSource = 'now (live)';
+        if (req.completed) {
+          // Pick the latest end-time we can prove from state. Order of
+          // preference: lastActivityAt (latest phaseHistory.completedAt) →
+          // any repos[*].mergedAt → fall back to "frozen at last poll".
+          // Reject any candidate that's <= startedAt — that's reconciler
+          // noise (the reconciler stamps a synthetic phaseHistory entry
+          // with startedAt=completedAt=NOW for ghost REQs, which would
+          // otherwise produce a 0m or negative Duration).
+          const candidates = [];
+          if (req.lastActivityAt) candidates.push({ ms: Date.parse(req.lastActivityAt), src: `last phase completion (${req.lastActivityAt})` });
+          for (const [, r] of Object.entries(req.repos || {})) {
+            if (r && typeof r.mergedAt === 'string') {
+              const m = Date.parse(r.mergedAt);
+              if (Number.isFinite(m)) candidates.push({ ms: m, src: `merge (${r.mergedAt})` });
+            }
+          }
+          const valid = candidates
+            .filter((c) => Number.isFinite(c.ms))
+            .filter((c) => c.ms > startMs);   // reject reconciler-synthetic timestamps
+          if (valid.length) {
+            valid.sort((a, b) => a.ms - b.ms);
+            const last = valid[valid.length - 1];
+            endMs = last.ms;
+            endSource = last.src;
+          } else {
+            // Reconciled ghost — no usable end timestamp distinct from
+            // startedAt. Don't render a misleading "0m" or "live now".
+            endMs = startMs;
+            endSource = 'reconciled (no telemetry available)';
+          }
+        }
+        durStr = fmtSpan(Math.max(0, endMs - startMs));
+        durTitle = req.completed
+          ? `Wall-clock for this pipeline run: startedAt=${escapeHtml(req.startedAt)} → ${escapeHtml(endSource)}. Frozen because the REQ has merged.`
+          : `Wall-clock since pipeline first started — startedAt=${escapeHtml(req.startedAt)}. Live counter; will freeze when the REQ merges.`;
+      }
+    }
+    const dur = durStr
+      ? `<span title="${durTitle}">Duration <b>${durStr}</b></span>`
+      : '';
+
+    // Per-REQ Total: wall-clock from spec creation to latest activity.
+    //   Live REQ:    now − specCreatedAt (keeps ticking).
+    //   Completed:   lastActivityAt − specCreatedAt (frozen).
+    // Different from Duration: Duration starts at startedAt (when /proceed
+    // first ran), Total starts at specCreatedAt (when /spec first wrote
+    // the requirement.md). The gap between specCreatedAt and startedAt is
+    // the time spec sat in draft before the pipeline kicked off.
+    let totalStr = '';
+    let totalTitle = '';
+    if (req.specCreatedAt) {
+      const sMs = Date.parse(req.specCreatedAt);
+      if (Number.isFinite(sMs)) {
+        let endMs = Date.now();
+        let endSrc = 'now (live)';
+        if (req.completed) {
+          const cands = [];
+          if (req.lastActivityAt) {
+            const m = Date.parse(req.lastActivityAt);
+            if (Number.isFinite(m) && m > sMs) cands.push({ ms: m, src: `last activity (${req.lastActivityAt})` });
+          }
+          if (cands.length) {
+            cands.sort((a, b) => a.ms - b.ms);
+            const last = cands[cands.length - 1];
+            endMs = last.ms;
+            endSrc = last.src;
+          } else {
+            endMs = sMs;
+            endSrc = 'no end telemetry';
+          }
+        }
+        totalStr = fmtSpan(Math.max(0, endMs - sMs));
+        totalTitle = req.completed
+          ? `Total wall-clock from spec creation to last activity. specCreatedAt=${escapeHtml(req.specCreatedAt)} → ${escapeHtml(endSrc)}. Frozen because the REQ has merged.`
+          : `Total wall-clock since spec was created — specCreatedAt=${escapeHtml(req.specCreatedAt)}. Live counter; freezes when the REQ merges.`;
+      }
+    }
+    const totalReq = totalStr
+      ? `<span title="${totalTitle}">Total <b>${totalStr}</b></span>`
+      : '';
+
+    // Active: real per-phase execution time when telemetry is available.
+    // Modern state files: sum each completed phase's (completedAt-startedAt)
+    //   + (now - currentPhaseStartedAt) for the in-flight phase.
+    // This excludes idle gaps between phases and pickup delays — it's the
+    // actual time the pipeline was working on this REQ.
+    // Legacy state files: fall back to startedAt → lastActivityAt span (an
+    // upper-bound proxy that includes between-phase idle).
+    let activeStr = '';
+    let activeTitle = '';
+    if (req.hasPhaseTelemetry || req.activeMs > 0 || req.currentPhaseStartedAt) {
+      let ms = Number.isFinite(req.activeMs) ? req.activeMs : 0;
+      // Add in-flight span if a phase is currently running.
+      if (!req.completed && req.currentPhaseStartedAt) {
+        const t = Date.parse(req.currentPhaseStartedAt);
+        if (Number.isFinite(t)) ms += Math.max(0, Date.now() - t);
+      }
+      activeStr = fmtSpan(ms);
+      activeTitle = `Sum of per-phase execution time across phaseHistory${
+        req.currentPhaseStartedAt && !req.completed
+          ? ` + in-flight phase since ${escapeHtml(req.currentPhaseStartedAt)}` : ''
+      }. Excludes idle gaps between phases.`;
+    } else if (req.startedAt && req.lastActivityAt && !req.completed) {
+      activeStr = fmtBetween(req.startedAt, req.lastActivityAt);
+      activeTitle = `Legacy state file — no per-phase telemetry. Approximation: pipeline start → most-recent phase completion (${escapeHtml(req.lastActivityAt)}).`;
+    }
+    const active = activeStr
+      ? `<span title="${activeTitle}">Active <b>${activeStr}</b></span>`
+      : '';
+
+    // Last completion: time since most-recent phase finished. Grows during
+    // an in-flight phase (no completion yet) and during any pipeline pause.
+    // Read as "is anything actually completing?" — large value with Active
+    // also climbing = a slow phase; large value with Active flat = a stalled
+    // pipeline.
+    const idle = (req.lastActivityAt && !req.completed)
+      ? `<span title="Time since the most-recent phase completion (${escapeHtml(req.lastActivityAt)}). High = current phase is slow or pipeline is stalled.">Last completion <b>${fmtSince(req.lastActivityAt)}</b> ago</span>`
+      : '';
+
+    const last = req.lastPhase
+      ? `<span>Last <b>${escapeHtml(typeof req.lastPhase === 'string' ? req.lastPhase : (req.lastPhase.phase ?? JSON.stringify(req.lastPhase)))}</b></span>`
+      : '';
+    const branch = req.integrationBranch ? `<span>Base <b>${escapeHtml(req.integrationBranch)}</b></span>` : '';
+    const taskLine = req.currentTask ? `<span>Task <b>${escapeHtml(req.currentTask)}</b></span>` : '';
+
+    // User wait: cumulative time the user spent thinking before submitting
+    // their next prompt within this REQ's worktree session(s). Server
+    // attributes Stop/UserPromptSubmit hook events to a REQ when the
+    // session cwd lives under <root>/.worktrees/<branch>/ and the branch
+    // embeds the REQ id. Hidden when nothing has accrued AND nobody is
+    // currently waiting — keeps non-worktree REQs (e.g. spec-only) clean.
+    const uw = req.userWait || { totalSec: 0, waitingSec: 0, waitingSessions: 0, turns: 0 };
+    const liveWait = uw.waitingSessions > 0
+      ? ` <b>+${fmtSec(uw.waitingSec)}</b> live`
+      : '';
+    const userWaitLine = (uw.totalSec > 0 || uw.waitingSessions > 0)
+      ? `<span title="Time the user spent at the prompt within this REQ's worktree session(s). Stops accruing when you submit; resumes when the assistant finishes its next turn. Across ${uw.turns} turn${uw.turns === 1 ? '' : 's'}.">⏸ User wait <b>${fmtSec(uw.totalSec)}</b>${liveWait}</span>`
+      : '';
+
+    // Stalled pipeline detection. The server flags req.stalled when no
+    // phase has completed and no new phase has started for longer than
+    // ADLC_DASHBOARD_STALL_SECONDS (default 5 min). Surface a pulsing
+    // pill alongside the state pill, plus a one-line resume hint.
+    const stalledPill = req.stalled
+      ? `<span class="pill stalled" title="No state-file write in ${fmtSpan(req.stalledSeconds * 1000)}. The pipeline-runner may be hung on a tool call, waiting on a permission prompt nobody answered, or genuinely doing slow work. Threshold: ${req.stallThresholdSec}s.">⚠ stalled (${fmtSpan(req.stalledSeconds * 1000)})</span>`
+      : '';
+    const stallHint = req.stalled
+      ? `<div class="stall-hint">No progress for <b>${fmtSpan(req.stalledSeconds * 1000)}</b>. To resume from <code>currentPhase=${escapeHtml(String(req.currentPhase ?? '?'))}</code>, run: <code>/proceed ${escapeHtml(req.reqId)}</code></div>`
+      : '';
+
+    // "Stale" hint — the on-disk pipeline-state.json disappeared (typical:
+    // worktree was removed before state finalization landed in main).
+    // The dashboard kept the last known snapshot in memory; the user
+    // either needs to run the reconciler (if the REQ has actually merged)
+    // or `/proceed` (to resume the pipeline that lost its state file).
+    const staleHint = req.stale
+      ? `<div class="stall-hint" style="background:rgba(167,139,250,0.06);border-color:rgba(167,139,250,0.30);color:#e9d5ff">State file gone but last snapshot kept in memory at <b>currentPhase=${escapeHtml(String(req.currentPhase ?? '?'))}</b>. ${escapeHtml(req.staleReason || '')} Try: <code>sh tools/reconcile-pipeline-state/reconcile.sh</code> or <code>/proceed ${escapeHtml(req.reqId)}</code></div>`
+      : '';
+
+    return `
+      <section class="req${req.stalled ? ' is-stalled' : ''}">
+        <div class="req-head">
+          <span class="req-id">${escapeHtml(req.reqId)}</span>
+          <span class="req-title ${req.title ? '' : 'muted'}">${escapeHtml(req.title || '(no title)')}</span>
+          ${stalledPill}
+          <span class="pill ${pill.cls}">${pill.label}</span>
+        </div>
+        <div class="req-body">
+          ${renderPhases(req, labels)}
+          <div class="meta-row">${phaseLine}${totalReq}${dur}${active}${idle}${last}${branch}${taskLine}${userWaitLine}</div>
+          ${renderRepos(req)}
+          ${renderTasks(req)}
+          ${renderBlockers(req)}
+          ${stallHint}
+          ${staleHint}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderProjectPicker(projects, activeName) {
+    if (!projects.length) {
+      pickerEl.hidden = true;
+      selectEl.innerHTML = '';
+      return;
+    }
+    pickerEl.hidden = false;
+    selectEl.innerHTML = projects.map((p) => {
+      const sel = p.name === activeName ? ' selected' : '';
+      const label = `${p.name} (${p.reqs.length})`;
+      return `<option value="${escapeHtml(p.name)}" title="${escapeHtml(p.path)}"${sel}>${escapeHtml(label)}</option>`;
+    }).join('');
+    selectEl.value = activeName;
+  }
+
+  function render(snap) {
+    window.__lastSnap = snap;
+    lastUpdatedEl.textContent = `updated ${fmtClock(new Date())}`;
+    const labels = snap.phaseLabels || PHASE_DEFAULT;
+
+    // Multi-project shape: { projects: [{ name, path, reqs }, ...] }
+    // Legacy single-project shape: { root, reqs } — kept for backward compat.
+    const projects = Array.isArray(snap.projects)
+      ? snap.projects
+      : (snap.reqs ? [{ name: snap.root || '(unknown)', path: snap.root || '', reqs: snap.reqs }] : []);
+
+    if (!projects.length) {
+      rootPathEl.textContent = '';
+      pickerEl.hidden = true;
+      selectEl.innerHTML = '';
+      main.innerHTML = `<div class="empty">No projects registered. Run <code>/init</code> in a project to register it, or check <code>~/.adlc/dashboard-registry.json</code>.</div>`;
+      return;
+    }
+
+    // If the URL hinted a project that hasn't shown up in the registry
+    // yet, hold off on falling back to projects[0] for a few snapshots —
+    // launch.sh upserts the registry before opening the URL, but the
+    // server polls every ~1.5s so there's a short window where the UI
+    // beats the registry refresh.
+    const hintMissing = _urlProjectHint && !projects.some((p) => p.name === _urlProjectHint);
+    if (hintMissing && (window.__hintGraceTicks = (window.__hintGraceTicks || 0) + 1) < 4) {
+      // Wait — the SSE/refresh tick will re-render shortly with the
+      // registered project visible. Render an empty-but-honest state.
+      pickerEl.hidden = true;
+      selectEl.innerHTML = '';
+      rootPathEl.textContent = '';
+      rootPathEl.title = '';
+      main.innerHTML = `<div class="empty">Loading project <b>${escapeHtml(_urlProjectHint)}</b>…</div>`;
+      return;
+    }
+    if (!projects.some((p) => p.name === selectedProject)) {
+      // Hint never showed up — fall back to first registered project.
+      setSelectedProject(projects[0].name);
+    }
+    const active = projects.find((p) => p.name === selectedProject) || projects[0];
+
+    renderProjectPicker(projects, active.name);
+    rootPathEl.textContent = active.path || '';
+    rootPathEl.title = active.path || '';   // Full path on hover when CSS truncates it.
+
+    const summary = renderProjectSummary(active);
+    if (!active.reqs || !active.reqs.length) {
+      main.innerHTML = `${summary}<div class="empty">No REQs found in <b>${escapeHtml(active.name)}</b> under <code>.adlc/specs/</code>.</div>`;
+      return;
+    }
+    main.innerHTML = summary + active.reqs.map((r) => renderReq(r, labels)).join('');
+  }
+
+  // Project-level summary bar above the REQ cards. Shows cumulative
+  // user-wait across every Claude Code session attributed to this
+  // project (worktree or main checkout) plus any in-flight wait. Hidden
+  // entirely when no hook events have arrived yet — keeps the dashboard
+  // clean for projects whose users haven't enabled hooks.
+  function renderProjectSummary(project) {
+    const uw = project.userWait || { totalSec: 0, waitingSec: 0, waitingSessions: 0, activeSessions: 0, turns: 0 };
+
+    // Cumulative pipeline-execution time across every REQ in the project.
+    // Sums each REQ's per-phase Active span (req.activeMs) plus, for any
+    // REQ still in flight, the in-flight phase span (now - currentPhaseStartedAt).
+    // This is the same Active calculation each REQ card renders, just rolled
+    // up. Pipeline-only metric — does NOT include user wait.
+    const nowMs = Date.now();
+    let execMs = 0;
+    let reqsWithExec = 0;
+    for (const r of project.reqs || []) {
+      let ms = Number.isFinite(r.activeMs) ? r.activeMs : 0;
+      if (!r.completed && r.currentPhaseStartedAt) {
+        const t = Date.parse(r.currentPhaseStartedAt);
+        if (Number.isFinite(t)) ms += Math.max(0, nowMs - t);
+      }
+      if (ms > 0) reqsWithExec++;
+      execMs += ms;
+    }
+    // User-wait math (kept for the User-wait pill, NOT for Total):
+    //   uw.totalSec   = sum of CLOSED wait windows (Stop → next Submit).
+    //   uw.waitingSec = the CURRENTLY-OPEN wait window (live "+Ns" pill).
+    const userWaitMs = (uw.totalSec || 0) * 1000;
+
+    // Total = wall-clock from EARLIEST signal across all REQs to LATEST
+    // signal across all REQs. Per user request: "last timestamp (across
+    // all reqs) minus the earliest timestamp from the very first spec."
+    //
+    // Earliest signal per REQ: specCreatedAt (server populates from
+    //   requirement.md `created:` if it's a real ISO datetime, else file
+    //   mtime). Falls back to startedAt if specCreatedAt is missing.
+    // Latest signal per REQ: lastActivityAt for completed/in-flight REQs;
+    //   for in-flight REQs add now() so the counter is live.
+    //
+    // This is the true wall-clock cost of moving the project end-to-end:
+    // it includes between-REQ idle gaps, user-wait windows, machine sleep,
+    // overnight pauses — everything. Exec (cumulative per-phase Active)
+    // remains the pure compute metric on its own pill.
+    let earliestMs = Infinity;
+    let latestMs = -Infinity;
+    let anyLive = false;
+    for (const r of project.reqs || []) {
+      const startCandidates = [r.specCreatedAt, r.startedAt]
+        .filter((s) => typeof s === 'string')
+        .map((s) => Date.parse(s))
+        .filter(Number.isFinite);
+      if (startCandidates.length) {
+        const minStart = Math.min(...startCandidates);
+        if (minStart < earliestMs) earliestMs = minStart;
+      }
+      const endCandidates = [r.lastActivityAt, r.startedAt]
+        .filter((s) => typeof s === 'string')
+        .map((s) => Date.parse(s))
+        .filter(Number.isFinite);
+      if (endCandidates.length) {
+        const maxEnd = Math.max(...endCandidates);
+        if (maxEnd > latestMs) latestMs = maxEnd;
+      }
+      if (!r.completed) anyLive = true;
+    }
+    if (anyLive && nowMs > latestMs) latestMs = nowMs;
+    const totalMs = (Number.isFinite(earliestMs) && Number.isFinite(latestMs))
+      ? Math.max(0, latestMs - earliestMs) : 0;
+
+    const hasUserWaitData = uw.totalSec > 0 || uw.activeSessions > 0;
+    const hasExecData = execMs > 0;
+    const hasTotalData = totalMs > 0;
+    if (!hasUserWaitData && !hasExecData && !hasTotalData) return '';
+
+    const liveBit = uw.waitingSessions > 0
+      ? `<span class="pill waiting" title="A Claude Code session is currently waiting for your input. Live counter; advances each second.">⏸ +${fmtSec(uw.waitingSec)} live (${uw.waitingSessions} session${uw.waitingSessions === 1 ? '' : 's'})</span>`
+      : '';
+    const userWaitBit = hasUserWaitData
+      ? `<span class="pill userwait" title="Cumulative user-wait time across all sessions attributed to this project. Captured via Stop / UserPromptSubmit hooks; aggregated server-side.">⏸ User wait <b>${fmtSec(uw.totalSec)}</b> across ${uw.turns} turn${uw.turns === 1 ? '' : 's'}</span>`
+      : '';
+    const execBit = hasExecData
+      ? `<span class="pill running" title="Cumulative pipeline execution time across every REQ — the sum of per-phase active spans. Excludes idle gaps between phases and user wait.">⚡ Exec <b>${fmtSpan(execMs)}</b> across ${reqsWithExec} REQ${reqsWithExec === 1 ? '' : 's'}</span>`
+      : '';
+    const earliestStr = Number.isFinite(earliestMs) ? new Date(earliestMs).toISOString() : '(none)';
+    const latestStr = Number.isFinite(latestMs) ? new Date(latestMs).toISOString() : '(none)';
+    const totalBit = hasTotalData
+      ? `<span class="pill stale" title="Total wall-clock from the earliest spec creation to the latest activity (or now() if any REQ is still in flight) across every REQ in this project. Includes between-REQ idle, user-wait, overnight pauses — the real elapsed cost of getting this project to where it is.&#10;Earliest: ${escapeHtml(earliestStr)}&#10;Latest:   ${escapeHtml(latestStr)}${anyLive ? ' (live — using now())' : ''}.">⏱ Total <b>${fmtSpan(totalMs)}</b></span>`
+      : '';
+
+    const sessionLabel = uw.activeSessions
+      ? `${uw.activeSessions} session${uw.activeSessions === 1 ? '' : 's'} tracked`
+      : `${(project.reqs || []).length} REQ${(project.reqs || []).length === 1 ? '' : 's'}`;
+
+    return `
+      <section class="project-bar">
+        <span class="label">Project</span>
+        <b>${escapeHtml(project.name)}</b>
+        ${execBit}
+        ${userWaitBit}
+        ${totalBit}
+        ${liveBit}
+        <span class="label" style="margin-left:auto">${sessionLabel}</span>
+      </section>
+    `;
+  }
+
+  function setConn(state, label) {
+    conn.className = 'conn ' + state;
+    conn.textContent = label;
+  }
+
+  function start() {
+    setConn('dead', 'connecting');
+    const es = new EventSource('/events');
+    es.addEventListener('state', (e) => {
+      try {
+        const snap = JSON.parse(e.data);
+        render(snap);
+        setConn('live', 'live');
+      } catch (_) { /* ignore */ }
+    });
+    es.onerror = () => {
+      setConn('dead', 'reconnecting…');
+      es.close();
+      setTimeout(start, 2000);
+    };
+  }
+
+  // Re-render every 30s so duration counters keep ticking even between SSE pushes.
+  // (The server-driven user-wait `+Ns live` counter is refreshed every ~1.5s by SSE
+  // because `waitingSec` advances on every snapshot whenever a session is waiting.)
+  setInterval(() => {
+    if (window.__lastSnap) render(window.__lastSnap);
+  }, 30000);
+
+  fetch('/api/state').then((r) => r.json()).then((snap) => {
+    window.__lastSnap = snap;
+    render(snap);
+  }).catch(() => {});
+
+  start();
+</script>
+</body>
+</html>

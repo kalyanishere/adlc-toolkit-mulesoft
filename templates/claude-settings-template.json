@@ -1,0 +1,124 @@
+{
+  "_comment": "ADLC Salesforce pipeline allowlist — copied into each project's .claude/settings.json by /init. defaultMode is bypassPermissions because /sprint and /proceed run unattended pipelines that fire many routine commands; the allow list below is the safety contract. To require human prompts in your projects, set your user-level ~/.claude/settings.json defaultMode to 'acceptEdits' or 'plan' (project settings override user settings, so set it project-side here too if you want it everywhere). Pre-approves routine git/gh/sf CLI / sf-lint / lint-skills / Apex test / sf agent test / Vlocity preview operations. Production deploys (sf project deploy start, sf agent activate, sf agent publish), Vlocity packDeploy, and destructive data ops (sf data delete/update/upsert/import) currently live in allow for unattended pipeline runs — move them to ask if you want a human gate. git/gh/npm/sh use broad prefix wildcards (anything destructive there is already on the allow list explicitly); sf and vlocity stay granular so the safe/destructive split is auditable.",
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "allow": [
+      "Bash(git:*)",
+      "Bash(gh:*)",
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(sf project deploy validate:*)",
+      "Bash(sf project deploy preview:*)",
+      "Bash(sf project deploy start --dry-run:*)",
+      "Bash(sf project deploy report:*)",
+      "Bash(sf project retrieve:*)",
+      "Bash(sf project list:*)",
+      "Bash(sf data query:*)",
+      "Bash(sf data export:*)",
+      "Bash(sf data search:*)",
+      "Bash(sf data resume:*)",
+      "Bash(sf data360:*)",
+      "Bash(sf org list:*)",
+      "Bash(sf org display:*)",
+      "Bash(sf org open:*)",
+      "Bash(sf org login web:*)",
+      "Bash(sf sobject:*)",
+      "Bash(sf sobject describe:*)",
+      "Bash(sf sobject list:*)",
+      "Bash(sf agent test run:*)",
+      "Bash(sf agent test resume:*)",
+      "Bash(sf agent generate:*)",
+      "Bash(sf agent preview:*)",
+      "Bash(sf agent test report:*)",
+      "Bash(sf apex run test:*)",
+      "Bash(sf apex get test:*)",
+      "Bash(sf apex run:*)",
+      "Bash(sf apex tail log:*)",
+      "Bash(sf apex get log:*)",
+      "Bash(sf apex list log:*)",
+      "Bash(sf scanner run:*)",
+      "Bash(sf force:*)",
+      "Bash(vlocity packGetDiffs:*)",
+      "Bash(vlocity packExport:*)",
+      "Bash(vlocity packDeploy --simulate:*)",
+      "Bash(sh:*)",
+      "Bash(/bin/sh:*)",
+      "Bash(python3:*)",
+      "Bash(node:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(find:*)",
+      "Bash(readlink:*)",
+      "Bash(pwd)",
+      "Bash(which:*)",
+      "Bash(command:*)",
+      "Bash(test:*)",
+      "Bash(date:*)",
+      "Bash(echo:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(ln:*)",
+      "Bash(cat:*)",
+      "Bash(touch:*)",
+      "Bash(chmod:*)",
+      "Bash(sed:*)",
+      "Bash(awk:*)",
+      "Bash(grep:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(xargs:*)",
+      "Bash(tee:*)",
+      "Bash(jq:*)",
+      "Bash(nohup:*)",
+      "Bash(kill:*)",
+      "Bash(disown:*)",
+      "Bash(exit:*)",
+      "Bash([:*)",
+      "Bash([ :*)",
+      "Bash(textutil:*)",
+      "Bash(sf project deploy start:*)",
+      "Bash(sf project deploy resume:*)",
+      "Bash(sf project deploy quick:*)",
+      "Bash(sf project deploy cancel:*)",
+      "Bash(sf agent activate:*)",
+      "Bash(sf agent publish:*)",
+      "Bash(sf data delete:*)",
+      "Bash(sf data update:*)",
+      "Bash(sf data upsert:*)",
+      "Bash(sf data import:*)",
+      "Bash(sf org delete:*)",
+      "Bash(sf org logout:*)",
+      "Bash(vlocity packDeploy:*)",
+      "Bash(vlocity packRetry:*)",
+      "Bash(./deploy.sh:*)"
+    ],
+    "ask": [
+    ]
+  },
+  "_hooks_comment": "Stop / UserPromptSubmit hooks emit one JSONL event per turn boundary to ~/.adlc/runtime/user-wait.jsonl. The sprint dashboard tails this log to compute per-session/per-project/per-REQ user-wait time (the gap between Claude finishing a turn and you submitting the next prompt). No third-party deps; uses POSIX date and a single appendFile per event. Works inside git worktrees (CLAUDE_PROJECT_DIR is set per-session by Claude Code).",
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p ~/.adlc/runtime && printf '{\"ts\":\"%s\",\"kind\":\"stop\",\"session\":\"%s\",\"cwd\":\"%s\"}\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \"${CLAUDE_SESSION_ID:-unknown}\" \"${CLAUDE_PROJECT_DIR:-$PWD}\" >> ~/.adlc/runtime/user-wait.jsonl"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p ~/.adlc/runtime && printf '{\"ts\":\"%s\",\"kind\":\"submit\",\"session\":\"%s\",\"cwd\":\"%s\"}\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \"${CLAUDE_SESSION_ID:-unknown}\" \"${CLAUDE_PROJECT_DIR:-$PWD}\" >> ~/.adlc/runtime/user-wait.jsonl"
+          }
+        ]
+      }
+    ]
+  }
+}

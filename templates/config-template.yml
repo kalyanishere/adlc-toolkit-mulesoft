@@ -1,0 +1,44 @@
+# .adlc/config.yml — ADLC Salesforce project configuration.
+# Defaults filled in by /init. Edit only to deviate.
+
+project:
+  name: "My Salesforce Project"
+  shortname: "XYZ"               # 3 uppercase letters; namespaces all REQ/BUG/LESSON ids
+
+salesforce:
+  app_prefix: "XYZ"              # defaults to project.shortname; used in perm-set naming
+  api_version: "66.0"            # 66.0+ required for Agentforce
+  org_alias: "<repo-basename>"   # /init sets this to the project directory name
+  package_directories:
+    - "force-app"
+  agentforce_variant: ""         # "Employee" | "Service" | "" (not in scope)
+  industries: []                 # subset of: [datacloud, agentforce, omnistudio, cme]
+  features:
+    ui_bundles: false            # multi-framework UI Bundles (Beta)
+  coverage:
+    mode: brownfield             # greenfield | brownfield
+    org_floor: 75                # platform minimum — never lower
+    org_target: 80               # project policy floor
+    class_floor: 75              # min coverage on changed Apex (brownfield only)
+    diff_only: false
+  smoke_tests: []                # Apex test class names for diff-aware fallback in /canary
+
+stack:
+  languages: [apex, javascript]
+  frontends: [lwc]
+  backends: [salesforce-platform]
+  databases: [salesforce-soql]
+  ci: github-actions
+
+repos:
+  sfdc:
+    primary: true
+
+merge_order:
+  - sfdc
+
+orgs:
+  sandbox: "<repo-basename>"     # /init sets this to the project directory name; /canary deploys here only
+
+agentforce_test_specs: ""        # path to sf agent test specs (Agentforce only)
+playwright_specs: "tests/e2e"    # /architect requires UI specs when set; "" to opt out
