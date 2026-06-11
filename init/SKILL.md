@@ -124,7 +124,7 @@ If a `CLAUDE.md`, `README.md`, or `package.json` exists, extract this info autom
     ethos-include.sh
   workflows/             # Copies of ~/.claude/skills-mulesoft/workflows/ RUNTIME files only — Dynamic Workflow scripts used by the workflow engine
     adlc-sprint.workflow.js   # ONE self-contained file: meta first, schemas + pure helpers inlined behind // ==== BEGIN/END PURE ==== (runtime has no require)
-    README.md            # NOTE: workflows/tests/ is intentionally NOT copied — those are toolkit-internal node:test files (CommonJS require) that break Jest in "type":"module" consumer repos (see Step 6)
+    README.md            # NOTE: workflows/tests/ is intentionally NOT copied — those are toolkit-internal node:test files (no consumer relevance)
 ```
 
 **Why the local copies of ETHOS.md, templates, partials, and workflows?** Claude Code's sandbox blocks the `Read` tool from accessing paths outside the current working directory. When a skill runs inside a git worktree (e.g., `.claude/worktrees/<name>/`), `~/.claude/skills-mulesoft/ETHOS.md`, `~/.claude/skills-mulesoft/templates/*.md`, `~/.claude/skills-mulesoft/partials/*.sh`, and `~/.claude/skills-mulesoft/workflows/*` become unreadable by subagents and any tool that uses `Read` mid-skill. Keeping copies under `.adlc/` makes the toolkit work identically in main checkouts and worktrees.
@@ -200,15 +200,6 @@ Add the following entries to the project's `.gitignore` (create it if it doesn't
 .adlc/.next-bug.lock.d/
 .adlc/.next-lesson.lock.d/
 .adlc/.cache/
-
-# Playwright session tokens & test artifacts. storageState.json holds a live
-# Salesforce session cookie — checking it in is a credential leak (test-auditor
-# flags as Critical). reports/playwright/ holds traces/videos/HTML reports
-# regenerated on every run.
-tests/e2e/storageState.json
-reports/playwright/
-playwright-report/
-test-results/
 ```
 
 ### Step 6: Copy ETHOS.md and Templates Into the Project
@@ -244,14 +235,9 @@ chmod +x .adlc/partials/*.sh
 #
 # Copy ONLY the runtime files: the workflow script(s) and the top-level README.
 # Do NOT copy workflows/tests/ — those are toolkit-internal `node:test` unit
-# tests for the inlined PURE helpers (CommonJS `require('node:test')`). They have
-# no purpose in a consumer repo, and shipping a `*.test.js` under .adlc/ is a
-# trap: in any "type":"module" repo running Jest, the DEFAULT testMatch
-# (**/?(*.)+(spec|test).[jt]s?(x)) discovers .adlc/workflows/tests/helpers.test.js,
-# runs it as ESM, and fails it with "ReferenceError: require is not defined" —
-# reddening `npm test` and any CI gate that runs it. The engine is ONE
-# self-contained file (no require/import/fs), so globbing *.workflow.js captures
-# everything the runtime ever resolves.
+# tests for the inlined PURE helpers, with no consumer relevance. The engine is
+# ONE self-contained file (no require/import/fs), so globbing *.workflow.js
+# captures everything the runtime ever resolves.
 mkdir -p .adlc/workflows
 cp ~/.claude/skills-mulesoft/workflows/*.workflow.js .adlc/workflows/
 cp ~/.claude/skills-mulesoft/workflows/README.md .adlc/workflows/
@@ -268,17 +254,9 @@ rm -rf .adlc/workflows/tests
 # so `rm -rf` on a "* 2" dir doesn't fail due to prior deletions.
 find .adlc -depth \( -name "* 2" -o -name "* 2.*" \) -exec rm -rf {} + 2>/dev/null
 
-# Advisory (Jest repos): the copy above ships NO test files under .adlc/, so the
-# default Jest testMatch stays green with no config change. Only a repo with a
-# custom BROAD testMatch (e.g. "**/*.js") would pick up .adlc/ — those repos
-# should add "<rootDir>/.adlc/" to testPathIgnorePatterns. Purely informational;
-# this does not edit package.json or any jest config.
-if grep -q '"jest"' package.json 2>/dev/null || find . -maxdepth 1 -name 'jest.config.*' 2>/dev/null | grep -q .; then
-  echo "ADVISORY (Jest detected): .adlc/ contains no test files by design — default 'npm test' is unaffected. If you use a custom broad testMatch, add \"<rootDir>/.adlc/\" to testPathIgnorePatterns."
-fi
 ```
 
-If the user has previously made intentional customizations to their local `.adlc/ETHOS.md`, `.adlc/templates/*.md`, `.adlc/partials/*.sh`, or `.adlc/workflows/adlc-sprint.workflow.js`, confirm before overwriting. Use `/template-drift` to surface what differs (it also flags a stale `.adlc/workflows/tests/` left by an older `/init` — the Jest landmine fixed above). Typical drift (stale copies) should be overwritten silently.
+If the user has previously made intentional customizations to their local `.adlc/ETHOS.md`, `.adlc/templates/*.md`, `.adlc/partials/*.sh`, or `.adlc/workflows/adlc-sprint.workflow.js`, confirm before overwriting. Use `/template-drift` to surface what differs (it also flags a stale `.adlc/workflows/tests/` left by an older `/init`). Typical drift (stale copies) should be overwritten silently.
 
 ### Step 7: Scaffold Retrieval Taxonomy
 
@@ -632,142 +610,6 @@ Advise the user:
 - "If this is a single-repo project (REQs only ever originate here and never touch other repos), leave `repos:` with the single primary entry. ADLC skills fall back to single-repo behavior when no siblings are declared."
 - "After editing, verify with `cat .adlc/config.yml` and make sure each sibling path resolves: `git -C <sibling-path> rev-parse --git-dir`."
 
-### Step 10: Scaffold Playwright UI harness (rare — only when an Experience API exposes a UI)
-
-Most MuleSoft projects are headless (System / Process APIs return JSON); Playwright is irrelevant. Only Experience APIs that render HTML for end users need Playwright.
-
-`/architect`'s "UI test obligation" requires every UI-bearing task to ship a paired Playwright spec when `.adlc/config.yml` declares `playwright_specs:`. The Mule presets (`mule-core.yml`, `mule-anypoint.yml`) seed `playwright_specs: ""` (empty), so by default this step is skipped.
-
-**Skip this step entirely** when:
-- `.adlc/config.yml` does not declare `playwright_specs:` (default — most Mule projects), OR
-- `playwright_specs:` is set to empty string.
-
-This step ONLY runs when the user has explicitly set `playwright_specs:` to a non-empty path (e.g., `"tests/e2e"`) — typical for Experience APIs returning HTML or single-page-app shells served from a Mule listener.
-
-**This step is idempotent** — every file copy is gated on `[ ! -f <dest> ]` so a re-run preserves customizations. If the user has hand-edited any harness file, surface a `/template-drift` advisory rather than overwriting.
-
-```bash
-# Verify sources exist
-TOOLKIT_PW="$HOME/.claude/skills/templates/playwright"
-if [ ! -d "$TOOLKIT_PW" ]; then
-  echo "ERROR: Playwright harness template not found at $TOOLKIT_PW. Ensure ~/.claude/skills is symlinked to the adlc-toolkit repo."
-  exit 1
-fi
-
-# Decide whether to scaffold. Read playwright_specs from .adlc/config.yml; bail when unset/empty.
-pw_specs=$(awk '/^playwright_specs:/ { sub(/^playwright_specs:[[:space:]]*/, ""); gsub(/["'\'']/, ""); sub(/[[:space:]]*#.*$/, ""); print; exit }' .adlc/config.yml 2>/dev/null)
-if [ -z "$pw_specs" ]; then
-  echo "Skipped Playwright harness scaffold — playwright_specs is not declared in .adlc/config.yml."
-else
-  # 1. playwright.config.ts at repo root — only if absent (preserve customizations).
-  if [ ! -f playwright.config.ts ]; then
-    cp "$TOOLKIT_PW/playwright.config.ts" playwright.config.ts
-    echo "Created playwright.config.ts from canonical template."
-  else
-    echo "Preserved existing playwright.config.ts."
-  fi
-
-  # 2. tests/e2e/global-setup.ts — only if absent.
-  mkdir -p "$pw_specs"
-  if [ ! -f "$pw_specs/global-setup.ts" ]; then
-    cp "$TOOLKIT_PW/tests/e2e/global-setup.ts" "$pw_specs/global-setup.ts"
-    echo "Created $pw_specs/global-setup.ts from canonical template."
-  else
-    echo "Preserved existing $pw_specs/global-setup.ts."
-  fi
-
-  # 3. example.spec.ts.example — implementer copies this when authoring the
-  # first spec. Always present, no-op if already there.
-  if [ ! -f "$pw_specs/example.spec.ts.example" ]; then
-    cp "$TOOLKIT_PW/tests/e2e/example.spec.ts.example" "$pw_specs/example.spec.ts.example"
-    echo "Created $pw_specs/example.spec.ts.example."
-  fi
-
-  # 4. tests/e2e/.gitignore — defense in depth on top of root .gitignore.
-  if [ ! -f "$pw_specs/.gitignore" ]; then
-    cp "$TOOLKIT_PW/tests/e2e/.gitignore" "$pw_specs/.gitignore"
-  fi
-
-  # 5. README.md inside the harness dir — orientation for the next dev.
-  if [ ! -f "$pw_specs/README.md" ]; then
-    cp "$TOOLKIT_PW/README.md" "$pw_specs/README.md"
-  fi
-
-  # 6. Wire Playwright into package.json — install the dev dep, install the
-  # chromium browser binary, and add the "test:e2e": "playwright test" script.
-  # This step is mandatory by default so the harness is immediately usable;
-  # set ADLC_INIT_SKIP_PLAYWRIGHT_INSTALL=1 to opt out (e.g. offline init,
-  # CI bootstrap that handles deps separately, pnpm/yarn projects that
-  # manage installs out-of-band).
-  if [ "${ADLC_INIT_SKIP_PLAYWRIGHT_INSTALL:-0}" = "1" ]; then
-    echo "Skipped Playwright npm install (ADLC_INIT_SKIP_PLAYWRIGHT_INSTALL=1). Run manually:"
-    echo "  npm install --save-dev @playwright/test"
-    echo "  npx playwright install --with-deps chromium"
-    echo "  and add \"test:e2e\": \"playwright test\" to package.json scripts."
-  elif [ ! -f package.json ]; then
-    echo "Skipped Playwright npm install — no package.json at repo root. Run /init from the repo root, or scaffold one first."
-  else
-    # Install @playwright/test as a dev dep when not already present. Detect
-    # via package.json (devDeps OR deps) rather than running `npm ls` so an
-    # uninstalled lockfile state still triggers a clean install.
-    pw_already_dep=$(node -e '
-      try {
-        const p = JSON.parse(require("fs").readFileSync("package.json","utf8"));
-        const has = (p.devDependencies && p.devDependencies["@playwright/test"]) ||
-                    (p.dependencies && p.dependencies["@playwright/test"]);
-        process.stdout.write(has ? "1" : "0");
-      } catch (_) { process.stdout.write("0"); }
-    ')
-    if [ "$pw_already_dep" = "1" ]; then
-      echo "@playwright/test already declared in package.json — skipping npm install."
-    else
-      echo "Installing @playwright/test (npm install --save-dev @playwright/test)..."
-      if npm install --save-dev @playwright/test; then
-        echo "  Done."
-      else
-        echo "WARNING: 'npm install --save-dev @playwright/test' failed. Re-run manually after fixing the cause (often offline/registry/permissions)."
-      fi
-    fi
-
-    # Install the chromium browser binary used by the harness. Idempotent —
-    # Playwright's installer no-ops when the matching version is already
-    # present. --with-deps pulls OS-level shared libs (Linux); on macOS it's
-    # a no-op for the deps part. Honor a separate skip flag so CI runners
-    # that pre-bake browsers can opt out.
-    if [ "${ADLC_INIT_SKIP_PLAYWRIGHT_BROWSERS:-0}" = "1" ]; then
-      echo "Skipped 'npx playwright install --with-deps chromium' (ADLC_INIT_SKIP_PLAYWRIGHT_BROWSERS=1)."
-    else
-      echo "Installing Chromium for Playwright (npx playwright install --with-deps chromium)..."
-      if npx --yes playwright install --with-deps chromium; then
-        echo "  Done."
-      else
-        echo "WARNING: 'npx playwright install --with-deps chromium' failed. Re-run manually before the first /architect on a UI REQ."
-      fi
-    fi
-
-    # Add the test:e2e script to package.json without touching anything else.
-    # Use Node so we don't risk breaking JSON formatting or losing an existing
-    # scripts entry.
-    test_e2e_added=$(node -e '
-      const fs = require("fs");
-      const p = JSON.parse(fs.readFileSync("package.json","utf8"));
-      p.scripts = p.scripts || {};
-      if (p.scripts["test:e2e"]) { process.stdout.write("kept"); return; }
-      p.scripts["test:e2e"] = "playwright test";
-      fs.writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");
-      process.stdout.write("added");
-    ')
-    if [ "$test_e2e_added" = "added" ]; then
-      echo "Added \"test:e2e\": \"playwright test\" to package.json scripts."
-    else
-      echo "Preserved existing \"test:e2e\" script in package.json."
-    fi
-  fi
-fi
-```
-
-After this step, Playwright is installed (`@playwright/test` + chromium browser binary) and `npm run test:e2e` is wired up. The next `/architect` run on a UI-bearing REQ lands its required `tests/e2e/<feature>.spec.ts` into an immediately-runnable harness — no manual `npm install` follow-up needed. Set `ADLC_INIT_SKIP_PLAYWRIGHT_INSTALL=1` to opt out of the npm install (e.g. offline init); set `ADLC_INIT_SKIP_PLAYWRIGHT_BROWSERS=1` to opt out of just the browser-binary download (e.g. CI runner with pre-baked browsers).
-
 ### Step 10.5: Register the project with the sprint dashboard & open it in Chrome
 
 Tell the shared dashboard (running on this host, shared across every project) about this project so its REQs show up alongside everything else. Then launch / surface the dashboard URL in the user's default browser (Chrome preferred on macOS) so they can immediately see this project listed.
@@ -800,6 +642,5 @@ After this step, the user should see `<project-name>` listed at `http://127.0.0.
 4. Confirm the rules and catalog files are in place: `.adlc/context/mulesoft-rules.md`, `.adlc/context/mule-skills-catalog.md`, `.adlc/partials/mule-quality-checklist.md`.
 5. Explain the ADLC workflow: `/spec` → `/validate` → `/architect` → `/validate` → implement → `/reflect` → `/review` → `/wrapup` (or use `/proceed` to run the full pipeline automatically).
 6. If cross-repo config was scaffolded, remind the user that `/proceed` will create worktrees in every touched sibling and open one PR per repo.
-7. If the Playwright harness was scaffolded (rare for Mule), confirm `npm run test:e2e` is wired.
-8. Remind the user to manually populate the remaining `.adlc/config.yml` MuleSoft fields: `anypoint_org_id`, `anypoint_environment`, `anypoint_region`, `api_layer`, and (when `governance.api_manager_enabled: true`) `governance.required_policies` + `governance.governance_ruleset`.
-9. Suggest adding ADLC skill references to the project's `CLAUDE.md` if one exists.
+7. Remind the user to manually populate the remaining `.adlc/config.yml` MuleSoft fields: `anypoint_org_id`, `anypoint_environment`, `anypoint_region`, `api_layer`, and (when `governance.api_manager_enabled: true`) `governance.required_policies` + `governance.governance_ruleset`.
+8. Suggest adding ADLC skill references to the project's `CLAUDE.md` if one exists.

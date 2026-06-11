@@ -1,6 +1,6 @@
 ---
 name: canary
-description: MuleSoft Sandbox deploy gate. Runs mule-preflight + mvn munit:test + governance:validate, then deploys to the Sandbox environment via DX MCP `deploy_mule_application` (CloudHub 2.0) or `mvn deploy -P <env>` (RTF / on-prem), with API Manager policy promotion via Platform MCP `apply_policy_to_instance` and Postman/Newman + (rare) Playwright smoke as post-deploy gates. **Sandbox-only by design** — Staging and Production deploys are intentionally out of scope (the project's CI/CD pipeline owns those promotions). Use when the user says "canary deploy", "deploy to sandbox", "smoke test the deploy", or wants validation + deploy confidence after a merge.
+description: MuleSoft Sandbox deploy gate. Runs mule-preflight + mvn munit:test + governance:validate, then deploys to the Sandbox environment via DX MCP `deploy_mule_application` (CloudHub 2.0) or `mvn deploy -P <env>` (RTF / on-prem), with API Manager policy promotion via Platform MCP `apply_policy_to_instance` and Postman/Newman smoke as the post-deploy gate. **Sandbox-only by design** — Staging and Production deploys are intentionally out of scope (the project's CI/CD pipeline owns those promotions). Use when the user says "canary deploy", "deploy to sandbox", "smoke test the deploy", or wants validation + deploy confidence after a merge.
 argument-hint: (no arguments — always targets the Sandbox environment from `.adlc/config.yml`)
 ---
 
@@ -8,7 +8,7 @@ argument-hint: (no arguments — always targets the Sandbox environment from `.a
 
 You are deploying a merged Mule change set to the project's Sandbox environment so the team can smoke-test it before any further promotion.
 
-`/canary` runs the canonical sequence: `tools/mule-preflight` (lint + munit + coverage + secrets + policies + governance:validate) → deploy via DX MCP `deploy_mule_application` (CloudHub 2.0 default) or `mvn deploy -P <env>` (RTF / on-prem) → API Manager policy promotion via Platform MCP → Postman/Newman smoke → (rare) Playwright UI smoke → coverage / governance verification. Each gate halts on first failure with a forward-fix recommendation. **Staging and production deploys are out of scope** — they belong to the project's CI/CD pipeline (GitHub Actions + Anypoint, Gearset for Anypoint, etc.). The ADLC pipeline ships changes to Sandbox; humans + CI promote from there.
+`/canary` runs the canonical sequence: `tools/mule-preflight` (lint + munit + coverage + secrets + policies + governance:validate) → deploy via DX MCP `deploy_mule_application` (CloudHub 2.0 default) or `mvn deploy -P <env>` (RTF / on-prem) → API Manager policy promotion via Platform MCP → Postman/Newman smoke → coverage / governance verification. Each gate halts on first failure with a forward-fix recommendation. **Staging and production deploys are out of scope** — they belong to the project's CI/CD pipeline (GitHub Actions + Anypoint, Gearset for Anypoint, etc.). The ADLC pipeline ships changes to Sandbox; humans + CI promote from there.
 
 ## Ethos
 
@@ -181,20 +181,6 @@ done
 
 Roll up pass/fail per collection. On any failure, **STOP** — surface the failing request, response status, and assertion message.
 
-#### Playwright UI smoke (rare — only when an Experience API renders HTML)
-
-Only when `.adlc/config.yml` declares `playwright_specs:` AND that directory contains at least one `*.spec.ts`/`*.spec.js`. Most Mule projects skip this entirely.
-
-```sh
-PLAYWRIGHT_BASE_URL="$SANDBOX_BASE_URL" \
-npx playwright test \
-  --project=sandbox \
-  --reporter=json \
-  --output "reports/playwright/sandbox"
-```
-
-Roll up pass/fail. On any failure, STOP — surface the failing spec, the screenshot/trace path under `reports/playwright/sandbox/`, and recommend a forward-fix.
-
 ### Step 6: Verify — governance scan + coverage check
 
 After deploy + smoke gates, run a final verification:
@@ -283,13 +269,6 @@ Mule runtime: <version>
 - Fail: 0
 - Result: ✓ clean
 
-### Smoke (Playwright UI — rare)
-- Specs run: NNN
-- Pass: NNN
-- Fail: 0
-- Trace artifacts: reports/playwright/sandbox/
-- Result: ✓ clean (or skipped — no Experience API UI in scope)
-
 ### Verification — governance + coverage
 - Governance scan: ✓ pass (ruleset: <id>)
 - Mode: <greenfield | brownfield>
@@ -307,7 +286,7 @@ Next step: <Sandbox deploy clean — promote via your CI/CD pipeline | halted be
 - **mvn package fails:** stop. Surface the Maven error.
 - **Deploy fails:** the corrective action is a forward-fix deploy; investigate the deploy log via DX MCP `list_applications` / Platform MCP `view_api_instance_details` or the Anypoint Runtime Manager UI.
 - **Policy promotion drift:** Critical finding. The declared `Policies.md` doesn't match the live API instance state. Re-run policy promotion or update `Policies.md` to match reality.
-- **Newman / Playwright smoke fails:** stop. Surface the failing request/spec; recommend forward-fix.
+- **Newman smoke fails:** stop. Surface the failing request and response status; recommend forward-fix.
 - **Coverage drops below floor:** Critical block (see Step 6).
 - **Governance scan fails:** Critical block. Address the ruleset violations before promotion.
 

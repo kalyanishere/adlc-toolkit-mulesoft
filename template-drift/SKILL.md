@@ -1,6 +1,6 @@
 ---
 name: template-drift
-description: Detect drift between this project's `.adlc/templates/` copies and the canonical templates in `~/.claude/skills-mulesoft/templates/`, and between `.adlc/partials/*.sh` and `~/.claude/skills-mulesoft/partials/*.sh`. Use when the user says "check template drift", "template drift", "are my templates out of date", or wants to know whether toolkit template or partial updates have landed in this project yet. Reports a per-file diff summary, flags intentional customizations from accidental staleness for templates, and reports any partial drift as `stale` (partials are shared executable code — no customization classification). Also flags stale `node:test`/`*.test.js` files left under `.adlc/workflows/` by an older `/init` (a Jest landmine in `"type":"module"` repos).
+description: Detect drift between this project's `.adlc/templates/` copies and the canonical templates in `~/.claude/skills-mulesoft/templates/`, and between `.adlc/partials/*.sh` and `~/.claude/skills-mulesoft/partials/*.sh`. Use when the user says "check template drift", "template drift", "are my templates out of date", or wants to know whether toolkit template or partial updates have landed in this project yet. Reports a per-file diff summary, flags intentional customizations from accidental staleness for templates, and reports any partial drift as `stale` (partials are shared executable code — no customization classification). Also flags stale `node:test`/`*.test.js` files left under `.adlc/workflows/` by an older `/init`.
 argument-hint: Optional template name (e.g., "requirement-template") to scope the check to a single file
 ---
 
@@ -72,17 +72,17 @@ For consumer projects:
 - If `.adlc/partials/mule-quality-checklist.md` exists, treat it as a partial drift candidate per Step 3 (any drift is `stale` — partials have no customization classification).
 - If `.adlc/context/mulesoft-rules.md` exists in the consumer but `partials/mule-quality-checklist.md` does NOT (in either consumer or toolkit), surface a one-line note that the consumer's rules document is unwired from the always-on baseline.
 
-### Step 3b: Detect Stale Workflow Test Files (Jest landmine)
+### Step 3b: Detect Stale Workflow Test Files
 
-A third sync surface is `.adlc/workflows/`. The current `/init` policy vendors **only** the runtime files (`adlc-sprint.workflow.js` + `README.md`) and deliberately does **not** copy the toolkit's `workflows/tests/` directory. Those are `node:test` unit tests (CommonJS `require('node:test')`) for the inlined pure helpers — toolkit-internal, with no purpose in a consumer repo.
+A third sync surface is `.adlc/workflows/`. The current `/init` policy vendors **only** the runtime files (`adlc-sprint.workflow.js` + `README.md`) and deliberately does **not** copy the toolkit's `workflows/tests/` directory. Those are `node:test` unit tests for the inlined pure helpers — toolkit-internal, with no purpose in a consumer repo.
 
-An **older** `/init` did `cp -R` of the whole `workflows/` tree and left `.adlc/workflows/tests/helpers.test.js` behind. In any `"type":"module"` repo running Jest, Jest's default testMatch (`**/?(*.)+(spec|test).[jt]s?(x)`) discovers that `*.test.js`, runs it as ESM, and fails it with `ReferenceError: require is not defined` — reddening `npm test` and any CI gate. This is pure accidental staleness (never an intentional customization), so `/template-drift` flags it loudly.
+An **older** `/init` did `cp -R` of the whole `workflows/` tree and left `.adlc/workflows/tests/helpers.test.js` behind. The file has no consumer relevance and only exists by accident; `/template-drift` flags it for removal.
 
-Scan `.adlc/` for any test file that Jest would collect:
+Scan `.adlc/` for any leftover toolkit test file:
 
 ```sh
-# Any *.test.js / *.spec.js anywhere under .adlc/ is the landmine. The known
-# offender is the workflows/tests/ tree from an older `cp -R` /init.
+# Any *.test.js / *.spec.js anywhere under .adlc/ is stale toolkit output. The
+# known offender is the workflows/tests/ tree from an older `cp -R` /init.
 find .adlc -type f \( -name '*.test.js' -o -name '*.spec.js' \) 2>/dev/null
 # Also surface a lingering tests/ dir (may also hold _load-pure.js, a .md, etc.):
 [ -d .adlc/workflows/tests ] && echo ".adlc/workflows/tests/ present (stale — remove)"
@@ -140,7 +140,7 @@ Intentional: 1. Accidental: 2. Missing: 1.
 
 Partials overall: 1 stale, 1 synced, 1 missing. (No customization classification — every partial drift is `stale` by design; see Step 3 rationale.)
 
-Workflow test files (.adlc/workflows/): 1 stale — `.adlc/workflows/tests/` (Jest landmine: `*.test.js` under .adlc/ breaks `npm test` in "type":"module" repos; remove). (Show `clean` when none found.)
+Workflow test files (.adlc/workflows/): 1 stale — `.adlc/workflows/tests/` (toolkit-internal node:test files left by an older /init; remove). (Show `clean` when none found.)
 ```
 
 Then, for each non-identical template, write a short per-file section:
@@ -192,7 +192,7 @@ For each **accidental** template drift, each **missing locally** template, **eve
 5. **spec-gate.sh** (partial, missing): Copy from toolkit to project.
    Command: `mkdir -p .adlc/partials && cp ~/.claude/skills-mulesoft/partials/spec-gate.sh .adlc/partials/spec-gate.sh`
 
-6. **.adlc/workflows/tests/** (stale workflow tests, Jest landmine): Remove. These are toolkit-internal `node:test` files that break `npm test` in `"type":"module"` repos; the runtime never needs them. Re-running `/init` also removes them.
+6. **.adlc/workflows/tests/** (stale workflow tests): Remove. These are toolkit-internal `node:test` files left by an older `/init`; the runtime never needs them. Re-running `/init` also removes them.
    Command: `rm -rf .adlc/workflows/tests`
 
 Reply with action numbers to apply (e.g. "1 2 3" or "all"), or "skip" to take no action.
@@ -220,6 +220,6 @@ At the end of the report:
 
 - Use `diff -u` for readable unified diffs. Fall back to `git diff --no-index` if preferred.
 - `wc -l` on the diff output is a decent proxy for drift size, but prefer counting `^+` and `^-` lines excluding the `+++`/`---` headers.
-- When running under `/status`, this skill should produce a one-line summary only (e.g. "Templates: 2 drifted, 1 missing. Partials: 1 stale, 0 missing. Workflow tests: 1 stale (Jest landmine).") rather than the full report. Detect that case by checking whether `$ARGUMENTS` contains `--brief`. Omit the "Workflow tests" clause when none are found.
+- When running under `/status`, this skill should produce a one-line summary only (e.g. "Templates: 2 drifted, 1 missing. Partials: 1 stale, 0 missing. Workflow tests: 1 stale (toolkit-internal — remove).") rather than the full report. Detect that case by checking whether `$ARGUMENTS` contains `--brief`. Omit the "Workflow tests" clause when none are found.
 - Partial comparison uses `diff -q` (quiet, exit-code-only) rather than `diff -u` because per-file unified diffs are not actionable for partials — the only remediation is "copy from toolkit". Show the diff only if the user asks for `--verbose`.
 - Do not invoke `/template-drift` recursively against the adlc-toolkit's own `.adlc/` (would always report drift against itself by construction).

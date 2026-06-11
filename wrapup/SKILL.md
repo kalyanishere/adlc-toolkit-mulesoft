@@ -394,7 +394,6 @@ Walk the touched Mule repos and promote the change set to **sandbox only**. Stag
    - **Postman/Newman** (when `mulesoft.smoke_tests:` is configured) — collection runs against the just-deployed Sandbox endpoint.
    - **Governance scan** (`anypoint-cli-v4 governance:validate` OR Platform MCP `check_policy_conformance`) — every API spec passes the configured ruleset.
    - **API instance policy state** (Platform MCP `view_api_instance_policies`) — live policies match the declarations in `Policies.md`. Drift is a deploy blocker.
-   - **Playwright** (when `playwright_specs:` is set — rare for Mule, only Experience APIs returning HTML) — happy-path UI smoke against Sandbox.
    On any failure, STOP — recommend a forward-fix; do NOT mark the wrapup complete.
 5. **API Manager policy promotion**: if this REQ added or modified API Manager policy declarations in `Policies.md`, the `/canary` skill calls Platform MCP `apply_policy_to_instance` for each declared policy on the Sandbox API instance. Confirm the result via `view_api_instance_policies` before continuing.
 6. **Exchange asset publication** (when `mulesoft.features.exchange_publishing: true` AND the REQ added a reusable asset): publish via DX MCP `create_and_manage_assets` (preferred) or `mvn deploy -P exchange-publish`. Confirm with Platform MCP `search_global_assets` that the asset shows up in Exchange.

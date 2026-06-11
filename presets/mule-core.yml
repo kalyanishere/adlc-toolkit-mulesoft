@@ -45,4 +45,3 @@ orgs:
 
 api_specs: "src/main/resources/api"  # /architect requires API specs when set; "" to opt out
 munit_specs: "src/test/munit"        # MUnit suite path
-playwright_specs: ""                 # not typical for Mule; "" by default

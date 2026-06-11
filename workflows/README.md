@@ -83,12 +83,8 @@ consumer's `.adlc/workflows/` (alongside `templates/` and `partials/`) so the
 engine works identically in a main checkout and in a worktree.
 
 **`tests/` is NOT vendored — by design.** The `tests/` directory holds
-toolkit-internal `node:test` unit tests (CommonJS `require('node:test')`) for the
-inlined pure helpers; they have no purpose in a consumer repo. Worse, shipping a
-`*.test.js` under `.adlc/` is a Jest landmine: in any `"type":"module"` repo, the
-default Jest `testMatch` discovers `.adlc/workflows/tests/helpers.test.js`, runs
-it as ESM, and fails it with `ReferenceError: require is not defined` — reddening
-`npm test` and any CI gate. So `/init` copies `*.workflow.js` + `README.md`
+toolkit-internal `node:test` unit tests for the inlined pure helpers; they have
+no purpose in a consumer repo. So `/init` copies `*.workflow.js` + `README.md`
 explicitly and never `tests/` (and `rm -rf`s a stale `tests/` from an older
 `/init`). `/template-drift` flags the stale directory if it lingers.
 

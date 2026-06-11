@@ -50,4 +50,3 @@ orgs:
 
 api_specs: "src/main/resources/api"
 munit_specs: "src/test/munit"
-playwright_specs: ""
