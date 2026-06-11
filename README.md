@@ -2,11 +2,13 @@
 
 Skills, agents, templates, and quality gates for spec-driven development on **MuleSoft / Anypoint Platform** projects with [Claude Code](https://claude.com/claude-code). Wraps the ADLC orchestration around the official [`@salesforce/mulesoft-vibes-skills`](https://docs.mulesoft.com/anypoint-code-builder/vibes-skills) skill pack and the two MuleSoft MCP servers (DX MCP and Platform MCP) so reviewers and the implementer consume Mule-specific rubrics by file glob.
 
-> **Status (2026-06-11)**: cloned from `adlc-toolkit-sfdc` and rebuilt for MuleSoft. Phase 0 complete (context rewrite + `mulesoft-rules.md` baseline + `mule-skills-catalog.md`). Subsequent phases — agent rewrites, skill SKILL.md rewrites, Mule presets, `skills/mule/` review rubrics, `tools/mule-lint`, `tools/mule-preflight` — are tracked but not yet authored. Until those land, **this toolkit is not yet usable end-to-end on a consumer project**. Use `adlc-toolkit-sfdc` as the reference for what each skill should look like once rewritten.
+> **Status (2026-06-11)**: cloned from `adlc-toolkit-sfdc` and rebuilt for MuleSoft. Phases 0a-g (context + agents + skill rewrites), 2 (10 review rubrics + `mule-router`), 4 (Mule presets + templates), and 7 (`mule-lint` / `mule-preflight` / `mule-coverage` tools) are landed. The 13 orchestration skills have substantive Mule-flavored `SKILL.md` content; rubrics carry real DataWeave 2.x / MUnit / APIkit / API Manager scoring. **Known gaps** (audit report, this date): `templates/requirement-template.md` tier examples are still SFDC-flavored; `spec/SKILL.md` retains four FlexiPage / perm-set carve-outs; `agents/pipeline-runner.md` describes the worktree as Apex/LWC at lines 55 and 292; `templates/task-template.md` example uses `path/to/file.js`; no rubric scores observability (correlation-id propagation, Anypoint Monitoring) despite `mulesoft-rules.md` calling it non-negotiable. Pre-consumer-launch sweep tracked in follow-ups.
+>
+> **Naming collision plan**: this fork and `adlc-toolkit-sfdc` ship the same skill names (`/init`, `/proceed`, …), so a developer with both installed would see one silently shadow the other. Resolution (planned, separate pass): rename this fork's skills to `*-mule` (sfdc fork → `*-sfdc`) and stand up a small `adlc-router` repo whose skills own the unsuffixed names and prompt for stack when both forks are present. Single-fork users see no behavior change.
 
-## What's Planned
+## What's Built
 
-### Orchestration skills (carry over from SFDC, will be rewritten)
+### Orchestration skills
 
 | Skill | Description |
 |-------|-------------|
@@ -17,11 +19,13 @@ Skills, agents, templates, and quality gates for spec-driven development on **Mu
 | `/proceed` | End-to-end pipeline: validate → architect → implement → reflect → review → PR → wrapup |
 | `/sprint` | Parallel pipeline orchestrator — multiple `/proceed` sessions across REQs (`--workflow` engine + legacy fallback) |
 | `/reflect` | Post-implementation self-review walking `mulesoft-rules` + Mule rubrics |
-| `/review` | 6-agent panel (correctness, quality, architecture, tests, security, reflector) loading Mule rubrics by file glob; reviewers also call DX/Platform MCP for runtime/governance evidence |
-| `/canary` | Anypoint Sandbox → Staging → Prod promotion gate (`mvn deploy -P<env>` + MUnit + Postman/API console smoke). **Prod is validate-only** — surfaces the validation id and instructs the user to run the deploy manually. |
-| `/wrapup` | Close out a feature — merge, `Policies.md` gate, API Manager policy promotion via Platform MCP, knowledge capture, `mvn deploy` / DX MCP `deploy_mule_application` |
+| `/review` | 5-agent panel (correctness, quality, architecture, tests, security) loading Mule rubrics by file glob; scoped to the current diff vs `main` |
+| `/audit` | **Whole-repo health check** — scores the existing codebase against `mulesoft-rules.md` + the 10 rubrics + governance/coverage/secrets, persists report under `.adlc/audit-reports/`. Read-only; distinct from `/review` (diff-scoped) and `/canary` (deploy gate). |
+| `/canary` | Anypoint Sandbox deploy gate (`mule-preflight` + `mvn deploy -P<env>` / DX MCP `deploy_mule_application` + Newman smoke + governance scan). **Sandbox-only by design** — Staging / Prod promotions belong to the project's CI/CD pipeline. |
+| `/wrapup` | Close out a feature — merge, `Policies.md` gate, API Manager policy promotion via Platform MCP, knowledge capture, deploy hand-off |
 | `/bugfix` | End-to-end bug-fix workflow (analyze → fix → verify → ship → capture lesson) |
-| `/audit` | Codebase audit (test coverage, governance compliance, secrets hygiene) |
+| `/status` | ADLC dashboard across REQ specs, bugs, pipeline state |
+| `/template-drift` | Detect drift between consumer `.adlc/` files and toolkit templates |
 
 ### MuleSoft skill / MCP integration
 
@@ -31,31 +35,41 @@ Skills, agents, templates, and quality gates for spec-driven development on **Mu
 
 See `.adlc/context/mule-skills-catalog.md` for the full file-glob → skill+rubric dispatch table.
 
-### Toolkit-authored Mule rubrics (planned, `skills/mule/`)
+### Toolkit-authored Mule rubrics (`skills/mule/`)
+
+All ten rubrics carry scoring tables, file-glob dispatch from `mule-router`, and real Mule XML / DataWeave 2.x / MUnit examples — not skeleton placeholders.
 
 | Rubric | Purpose |
 |---|---|
-| `mule-flow-quality` | Quality bar for Mule XML flows |
-| `mule-error-handling` | Error-handler completeness (correctness) |
-| `dataweave-quality` | DW 2.x syntax, output directive, functional composition |
-| `munit-coverage` | Coverage bar, mock completeness, assertion quality |
-| `api-led-architecture` | System / Process / Experience layering |
-| `apikit-contract-conformance` | APIkit-bound RAML/OAS, contract-first |
-| `mule-secrets-hygiene` | Secure-properties, no hardcoded credentials |
-| `mule-connector-config-hygiene` | One config per upstream, timeout/retry, pooling |
-| `mule-deploy-hygiene` | `pom.xml`, `mule-artifact.json`, vCore/replica sizing |
-| `governance-policies` | API Manager policy declarations, governance scan conformance |
+| `mule-flow-quality` | 150-pt scoring on flow naming, newspaper rule, sub-flow reuse, choice/error structure |
+| `mule-error-handling` | Error-handler completeness, `<until-successful>` / `<batch:job>` / `<scatter-gather>` semantics |
+| `dataweave-quality` | 100-pt scoring on DW 2.0 syntax, output directives, null-safety, module reuse |
+| `munit-coverage` | 120-pt scoring on coverage floors, mock completeness per connector, assertion quality |
+| `api-led-architecture` | System / Process / Experience layering with Platform MCP cross-checks |
+| `apikit-contract-conformance` | RAML/OAS spec quality, APIkit binding, contract-first enforcement |
+| `mule-secrets-hygiene` | secure-properties, AES requirement, prod-Basic-Auth ban, two-connected-app audit |
+| `mule-connector-config-hygiene` | One config per upstream (HTTP / DB / Salesforce / JMS / Kafka / SFTP), pooling, reconnection |
+| `mule-deploy-hygiene` | CloudHub 2.0 + RTF deploy XML, vCore/replica sizing, JDK 17, mule-maven-plugin 4.x |
+| `governance-policies` | API Manager policy declarations vs live state, governance ruleset scan, drift detection |
 
-## Install (when complete)
+### Quality tools (`tools/`)
+
+| Tool | What it does |
+|---|---|
+| `mule-lint/check.sh` (+ `check.py`) | 474-line linter: hardcoded creds, missing error-handlers, DW 1.0, missing output, `Thread.sleep`, weak names, prod Basic Auth |
+| `mule-preflight/check.sh` | Pre-deploy gate: lint → `mvn validate compile munit:test` → coverage → secrets → policies → `anypoint-cli-v4 governance:validate` |
+| `mule-coverage/check.sh` (+ `check.py`) | Parses MUnit coverage XML, applies `mulesoft.coverage` floor policy from `.adlc/config.yml` |
+
+## Install (when ready for consumer use)
 
 ```bash
 git clone https://github.com/<org>/adlc-toolkit-mulesoft.git ~/.claude/skills-mulesoft
 ln -s ~/.claude/skills-mulesoft/agents ~/.claude/agents-mulesoft
 ```
 
-The symlink target is `skills-mulesoft` (not `skills`) to avoid colliding with `adlc-toolkit-sfdc` if both forks are installed on the same machine.
+The symlink target is `skills-mulesoft` (not `skills`) to avoid colliding with `adlc-toolkit-sfdc` *files* on the same machine. Note that this does NOT solve the slash-command collision (both forks register `/init`, `/proceed`, etc.) — that's resolved by the planned `*-mule` / `*-sfdc` rename + `adlc-router` shim. Until that lands, consumer projects must install only one fork.
 
-## Consumer prerequisites (when complete)
+## Consumer prerequisites
 
 - Node.js 20+
 - Java 17 (LTS)
@@ -81,4 +95,5 @@ The six builder principles in `ETHOS.md` are injected into every skill at invoca
 
 ## Related
 
-- **`adlc-toolkit-sfdc`** — the Salesforce sibling fork. Consumer projects should pick ONE toolkit per repo (not both — they're symlinked at different `skills-*` targets to avoid command collision, but each `/init` is mutually exclusive at the consumer level).
+- **`adlc-toolkit-sfdc`** — the Salesforce sibling fork. Until the rename + `adlc-router` lands, consumer projects must pick ONE toolkit per machine (slash-command names collide). Once it lands, both can coexist and `/init` will prompt for stack when both are installed.
+- **`adlc-router`** (planned) — small shim repo whose skills own the unsuffixed names (`/init`, `/spec`, `/proceed`, …) and dispatch to `*-mule` or `*-sfdc` underlying skills. Single-fork users never see the dispatch prompt.
