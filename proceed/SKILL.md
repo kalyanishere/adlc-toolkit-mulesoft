@@ -35,7 +35,6 @@ For everything else — including every **End-of-phase log** block below, every 
 ## Context
 
 - Mule quality checklist: !`cat .adlc/partials/mule-quality-checklist.md 2>/dev/null || cat ~/.claude/skills-mulesoft/partials/mule-quality-checklist.md 2>/dev/null || echo "No mule-quality-checklist found"`
-- Sprint dashboard: !`sh ~/.claude/skills-mulesoft/tools/sprint-dashboard/launch.sh`
 
 ## Arguments
 
