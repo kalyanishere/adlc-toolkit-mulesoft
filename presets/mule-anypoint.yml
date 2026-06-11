@@ -1,0 +1,53 @@
+# Preset: Mule Anypoint (Core + API Manager + Governance + Exchange + RTF/CloudHub 2.0).
+# Copy to .adlc/config.yml; /init fills the placeholders. Trim `governance.required_policies`
+# to what's actually in scope — leaving unused policies on produces noisy review findings.
+
+project:
+  name: "<Project Display Name>"
+  shortname: "XYZ"
+  preset: mule-anypoint
+
+mulesoft:
+  app_prefix: "XYZ"
+  mule_runtime: "4.6.0"
+  java_version: "17"
+  anypoint_org_id: "<org-id>"
+  anypoint_environment: "Sandbox"
+  anypoint_region: "PROD_US"
+  deploy_target: "cloudhub2"        # cloudhub2 | rtf | onprem
+  api_layer: "process"              # change to system or experience as appropriate
+  governance:
+    api_manager_enabled: true
+    required_policies:
+      - client-id-enforcement
+      - rate-limiting
+      - jwt-validation              # or oauth2-validation
+    governance_ruleset: "anypoint-best-practices"  # ruleset id used by anypoint-cli-v4 governance:validate
+  features:
+    exchange_publishing: true       # publish reusable assets to Exchange via /wrapup
+  coverage:
+    mode: brownfield
+    munit_floor: 80
+    flow_floor: 75
+    diff_only: false
+  smoke_tests: []
+
+stack:
+  languages: [java, dataweave]
+  runtimes: [mule-4.6]
+  build: [maven]
+  ci: github-actions
+
+repos:
+  mule:
+    primary: true
+
+merge_order:
+  - mule
+
+orgs:
+  sandbox: "<repo-basename>"
+
+api_specs: "src/main/resources/api"
+munit_specs: "src/test/munit"
+playwright_specs: ""

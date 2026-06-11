@@ -1,0 +1,48 @@
+# Preset: Mule Core (Mule app + DataWeave + MUnit + CloudHub 2.0 deploy).
+# Copy to .adlc/config.yml; /init fills the placeholders.
+
+project:
+  name: "<Project Display Name>"
+  shortname: "XYZ"
+  preset: mule-core
+
+mulesoft:
+  app_prefix: "XYZ"
+  mule_runtime: "4.6.0"             # 4.6.0+ floor
+  java_version: "17"                # LTS — 17 is the supported runtime
+  anypoint_org_id: "<org-id>"       # /init prompts for this
+  anypoint_environment: "Sandbox"   # Sandbox | Staging | Production
+  anypoint_region: "PROD_US"        # PROD_US | PROD_EU | PROD_CA | PROD_JP | PROD_IN
+  deploy_target: "cloudhub2"        # cloudhub2 | rtf | onprem
+  api_layer: "system"               # system | process | experience
+  governance:
+    api_manager_enabled: false      # opt-in for Core preset; on by default in Anypoint preset
+    required_policies: []           # e.g., [client-id-enforcement, rate-limiting]
+  features:
+    exchange_publishing: false
+  coverage:
+    mode: brownfield                # greenfield | brownfield
+    munit_floor: 80                 # per-app coverage floor
+    flow_floor: 75                  # per-changed-flow floor (brownfield only)
+    diff_only: false
+  smoke_tests: []                   # Postman/Newman or MUnit tags for /canary
+
+stack:
+  languages: [java, dataweave]
+  runtimes: [mule-4.6]
+  build: [maven]
+  ci: github-actions
+
+repos:
+  mule:
+    primary: true
+
+merge_order:
+  - mule
+
+orgs:
+  sandbox: "<repo-basename>"
+
+api_specs: "src/main/resources/api"  # /architect requires API specs when set; "" to opt out
+munit_specs: "src/test/munit"        # MUnit suite path
+playwright_specs: ""                 # not typical for Mule; "" by default
