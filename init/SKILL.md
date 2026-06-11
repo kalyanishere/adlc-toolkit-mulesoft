@@ -1,16 +1,18 @@
 ---
 name: init
-description: Bootstrap .adlc/ structure in a new repo or subdirectory
-argument-hint: Optional target directory (defaults to current directory)
+description: Bootstrap .adlc/ structure in a new repo or subdirectory (auto-detects SFDC vs MuleSoft stack)
+argument-hint: Optional target directory (defaults to current directory). Pass --stack=sfdc|mulesoft to force a stack.
 ---
 
-# /init — Bootstrap ADLC Structure
+# /init — Bootstrap ADLC Structure (Stack-Aware Dispatcher)
 
 You are setting up the `.adlc/` directory structure for spec-driven development.
 
+This is a **unified dispatcher** shared by both `adlc-toolkit-sfdc` and `adlc-toolkit-mulesoft`. The same file lives in both toolkits byte-identically. At runtime it auto-detects whether the target project is SFDC or MuleSoft, locates the correct toolkit on disk, and runs the matching scaffold logic.
+
 ## Ethos
 
-!`sh .adlc/partials/ethos-include.sh 2>/dev/null || sh ~/.claude/skills-mulesoft/partials/ethos-include.sh`
+!`sh .adlc/partials/ethos-include.sh 2>/dev/null || true`
 
 ## Input
 
@@ -18,16 +20,189 @@ Target: $ARGUMENTS
 
 ## Instructions
 
+### Step 0: Detect Project Stack & Locate Toolkit
+
+Before anything else, decide whether this project is **Salesforce (`sfdc`)** or **MuleSoft (`mulesoft`)**, then resolve the absolute path of the matching toolkit (`TOOLKIT_HOME`).
+
+Detection rules (filesystem signals — first match wins):
+- `force-app/` directory present, OR `sfdx-project.json` at repo root → `sfdc`
+- `mule-artifact.json` present anywhere, OR `pom.xml` containing `mule-maven-plugin` → `mulesoft`
+- Existing `.adlc/context/sf-skills-catalog.md` → `sfdc`
+- Existing `.adlc/context/mule-skills-catalog.md` → `mulesoft`
+- Existing `.adlc/config.yml` containing `salesforce:` block → `sfdc`
+- Existing `.adlc/config.yml` containing `mulesoft:` block → `mulesoft`
+- `--stack=sfdc` or `--stack=mulesoft` in `$ARGUMENTS` → use that
+- Otherwise → ambiguous; ask the user via AskUserQuestion which stack they want
+
+Toolkit lookup (after stack is known):
+- Probe these paths in order; pick the first that contains `init/SKILL.md` AND `templates/config-template.yml` declaring the matching stack key:
+  1. `~/.claude/skills` (canonical SFDC symlink slot)
+  2. `~/.claude/skills-mulesoft` (canonical Mule symlink slot)
+  3. Sibling directories of the currently-running toolkit (`adlc-toolkit-sfdc`, `adlc-toolkit-mulesoft` next to each other)
+  4. Common workspace roots: `~/Downloads/Workspaces/*/adlc-toolkit-{sfdc,mulesoft}`, `~/workspaces/*/adlc-toolkit-{sfdc,mulesoft}`, `~/code/*/adlc-toolkit-{sfdc,mulesoft}`
+- If found, persist `STACK` and `TOOLKIT_HOME` so every later bash block can source them.
+- If not found, hard-fail with a clear "clone the missing toolkit" message.
+
+```bash
+# Detect stack and locate toolkit. Persists STACK + TOOLKIT_HOME to
+# ~/.adlc/runtime/init-state.sh so every subsequent block in this skill can
+# source it. Idempotent: re-running /init re-resolves and overwrites.
+
+set -e
+mkdir -p "$HOME/.adlc/runtime"
+
+# 0a — Argument override (--stack=sfdc | --stack=mulesoft)
+ARG_STACK=""
+case "$*" in
+  *--stack=sfdc*)      ARG_STACK="sfdc" ;;
+  *--stack=mulesoft*)  ARG_STACK="mulesoft" ;;
+esac
+
+# 0b — Filesystem signals
+DETECTED=""
+if [ -n "$ARG_STACK" ]; then
+  DETECTED="$ARG_STACK"
+elif [ -d "force-app" ] || [ -f "sfdx-project.json" ]; then
+  DETECTED="sfdc"
+elif [ -f "mule-artifact.json" ] || (find . -maxdepth 3 -name mule-artifact.json 2>/dev/null | head -1 | grep -q .); then
+  DETECTED="mulesoft"
+elif [ -f "pom.xml" ] && grep -q "mule-maven-plugin" pom.xml 2>/dev/null; then
+  DETECTED="mulesoft"
+elif [ -f ".adlc/context/sf-skills-catalog.md" ]; then
+  DETECTED="sfdc"
+elif [ -f ".adlc/context/mule-skills-catalog.md" ]; then
+  DETECTED="mulesoft"
+elif [ -f ".adlc/config.yml" ] && grep -q '^salesforce:' .adlc/config.yml 2>/dev/null; then
+  DETECTED="sfdc"
+elif [ -f ".adlc/config.yml" ] && grep -q '^mulesoft:' .adlc/config.yml 2>/dev/null; then
+  DETECTED="mulesoft"
+fi
+
+if [ -z "$DETECTED" ]; then
+  # Will be resolved in 0c by asking the user via AskUserQuestion.
+  DETECTED="ASK"
+fi
+echo "DETECTED_STACK=$DETECTED"
+```
+
+If `DETECTED_STACK=ASK`, **call AskUserQuestion** to ask the user:
+
+> "No SFDC or MuleSoft signals found in this directory (`force-app/`, `mule-artifact.json`, etc.). Which stack should `/init` scaffold?"
+> Options:
+> - **Salesforce (sfdc)** — Apex / LWC / Flow / OmniStudio / Data Cloud / Agentforce
+> - **MuleSoft (mulesoft)** — Mule 4 apps / Anypoint Platform / DataWeave
+
+Capture the answer in shell variable `STACK` (`sfdc` or `mulesoft`).
+
+```bash
+# 0c — Locate matching toolkit. STACK must be set ('sfdc' or 'mulesoft') by now.
+# (If 0b returned ASK, the AskUserQuestion answer is set above as $STACK.)
+
+# Probe a list of candidate toolkit roots. Pick the first that:
+#   1. has init/SKILL.md
+#   2. has templates/config-template.yml declaring the matching stack key
+locate_toolkit() {
+  stack="$1"
+  needle="^${stack}:"
+  [ "$stack" = "sfdc" ] && needle="^salesforce:"
+
+  # Build candidate list
+  candidates=""
+  if [ "$stack" = "sfdc" ]; then
+    candidates="$HOME/.claude/skills $HOME/.claude/skills-sfdc"
+  else
+    candidates="$HOME/.claude/skills-mulesoft $HOME/.claude/skills-mule"
+  fi
+  # Workspace fallback globs. Some shells (zsh in default mode) abort on a glob
+  # that matches nothing. We expand each parent root individually with `find`
+  # so missing dirs are no-ops instead of fatal.
+  for root in "$HOME/Downloads/Workspaces" "$HOME/workspaces" "$HOME/code" "$HOME/repos" "$HOME/src"; do
+    [ -d "$root" ] || continue
+    # One level deep — sibling project dirs that might contain a checked-out toolkit.
+    for parent in $(find "$root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null); do
+      if [ "$stack" = "sfdc" ]; then
+        candidates="$candidates $parent/adlc-toolkit-sfdc $parent/adlc-toolkit"
+      else
+        candidates="$candidates $parent/adlc-toolkit-mulesoft $parent/adlc-toolkit-mule"
+      fi
+    done
+    # Also consider the root itself as a parent (e.g., toolkits cloned directly under ~/code/).
+    if [ "$stack" = "sfdc" ]; then
+      candidates="$candidates $root/adlc-toolkit-sfdc $root/adlc-toolkit"
+    else
+      candidates="$candidates $root/adlc-toolkit-mulesoft $root/adlc-toolkit-mule"
+    fi
+  done
+  # Sibling of the running toolkit (resolve symlinks)
+  for sym in "$HOME/.claude/skills" "$HOME/.claude/skills-mulesoft"; do
+    [ -L "$sym" ] || continue
+    real=$(readlink -f "$sym" 2>/dev/null || readlink "$sym")
+    [ -z "$real" ] && continue
+    parent=$(dirname "$real")
+    if [ "$stack" = "sfdc" ]; then
+      candidates="$candidates $parent/adlc-toolkit-sfdc"
+    else
+      candidates="$candidates $parent/adlc-toolkit-mulesoft"
+    fi
+  done
+
+  for c in $candidates; do
+    [ -f "$c/init/SKILL.md" ] || continue
+    [ -f "$c/templates/config-template.yml" ] || continue
+    if grep -q "$needle" "$c/templates/config-template.yml" 2>/dev/null; then
+      # Resolve symlinks to absolute path so later blocks aren't surprised.
+      printf '%s' "$(cd "$c" && pwd -P)"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if ! TOOLKIT_HOME=$(locate_toolkit "$STACK"); then
+  echo "ERROR: Could not find adlc-toolkit-$STACK on this machine."
+  echo "Searched: ~/.claude/skills, ~/.claude/skills-mulesoft, common workspace roots."
+  echo ""
+  echo "To fix:"
+  echo "  1. Clone the toolkit, e.g.:"
+  echo "       git clone https://github.com/<org>/adlc-toolkit-$STACK ~/code/adlc-toolkit-$STACK"
+  echo "  2. (Optional, recommended) Create the well-known symlink so /init finds it instantly:"
+  if [ "$STACK" = "sfdc" ]; then
+    echo "       ln -sfn ~/code/adlc-toolkit-sfdc ~/.claude/skills"
+  else
+    echo "       ln -sfn ~/code/adlc-toolkit-mulesoft ~/.claude/skills-mulesoft"
+  fi
+  echo "  3. Re-run /init."
+  exit 1
+fi
+
+echo "STACK=$STACK"
+echo "TOOLKIT_HOME=$TOOLKIT_HOME"
+
+# Persist for every later bash block in this skill.
+cat > "$HOME/.adlc/runtime/init-state.sh" <<EOF
+# Auto-generated by /init Step 0. Sourced by every subsequent bash block.
+# Re-run /init to refresh.
+STACK="$STACK"
+TOOLKIT_HOME="$TOOLKIT_HOME"
+export STACK TOOLKIT_HOME
+EOF
+echo "Wrote ~/.adlc/runtime/init-state.sh"
+```
+
+For the rest of this skill, **every Bash block must start with** `. "$HOME/.adlc/runtime/init-state.sh"` so `$STACK` and `$TOOLKIT_HOME` are available.
+
 ### Step 1: Determine Target Directory
-1. If given a path, use that as the target
-2. If no argument, use the current working directory
-3. Check if `.adlc/` already exists — if so, report what's already there and ask if the user wants to reinitialize or fill gaps
+1. If given a path argument (other than `--stack=...`), use it as the target.
+2. If no argument, use the current working directory.
+3. Check if `.adlc/` already exists — if so, report what's already there and ask if the user wants to reinitialize or fill gaps.
 
 ### Step 1.5: Ensure the Target Directory is a Git Repo
 
 The whole ADLC pipeline assumes a working git repo: `/proceed` Step 0 runs `git worktree add`, every phase commits, `/wrapup` opens PRs. Initializing `.adlc/` inside a non-git directory ships a project that cannot proceed past `/spec`. Treat git as a precondition: if the directory isn't a git repo, **`git init` it locally by default** — assume a remote will be wired in later.
 
 ```bash
+. "$HOME/.adlc/runtime/init-state.sh"
+
 # Detect git status. We use `git rev-parse --git-dir` rather than `[ -d .git ]`
 # because a worktree's .git is a file, not a directory, and a parent-tracked
 # subdirectory shouldn't get its own re-init.
@@ -35,9 +210,6 @@ if git rev-parse --git-dir >/dev/null 2>&1; then
   echo "Target is already inside a git repo — skipping git init."
 else
   echo "No git repo detected at target. Initializing one locally..."
-  # Default branch: prefer the user's configured init.defaultBranch, else
-  # `main` (matches GitHub's default since 2020 and what /proceed expects
-  # when .adlc/config.yml does not declare a different integration branch).
   default_branch=$(git config --global --get init.defaultBranch 2>/dev/null || true)
   default_branch=${default_branch:-main}
   git init -b "$default_branch"
@@ -47,42 +219,87 @@ else
 fi
 ```
 
-This step is idempotent and never destructive — it only runs `git init` when there is no existing git context, and never touches an existing one. After this step every subsequent step can safely assume a working `.git/` and a sane default branch.
-
 ### Step 1.6: Scaffold Claude Code Permissions Allowlist (FIRST — before everything else)
 
-This is intentionally hoisted before every other Bash-using step. The permissions allowlist must be in place **before** the rest of `/init` runs `mkdir`, `cp`, `sed`, `awk`, `node`, etc. — otherwise every subsequent step interactively prompts for the permission its allowlist was supposed to grant. Running this after Step 2/3/4 turns `/init` into a 30-prompt experience; running it here makes the rest of the run silent.
+This is intentionally hoisted before every other Bash-using step. The permissions allowlist must be in place **before** the rest of `/init` runs `mkdir`, `cp`, `sed`, `awk`, `node`, etc. — otherwise every subsequent step interactively prompts for the permission its allowlist was supposed to grant.
 
 ```bash
-# Verify source exists
-if [ ! -f ~/.claude/skills-mulesoft/templates/claude-settings-template.json ]; then
-  echo "ERROR: Settings template not found at ~/.claude/skills-mulesoft/templates/claude-settings-template.json. Ensure ~/.claude/skills is symlinked to the adlc-toolkit repo."
+. "$HOME/.adlc/runtime/init-state.sh"
+
+if [ ! -f "$TOOLKIT_HOME/templates/claude-settings-template.json" ]; then
+  echo "ERROR: Settings template not found at $TOOLKIT_HOME/templates/claude-settings-template.json. Toolkit appears corrupted."
   exit 1
 fi
 
-# Ensure destination directory exists
 mkdir -p .claude
 
-# Idempotent copy: only copy if destination does not already exist
 if [ ! -f .claude/settings.json ]; then
-  cp ~/.claude/skills-mulesoft/templates/claude-settings-template.json .claude/settings.json
+  cp "$TOOLKIT_HOME/templates/claude-settings-template.json" .claude/settings.json
   echo "Created .claude/settings.json from canonical template (Step 1.6 — early scaffold)."
 else
   echo "Preserved existing .claude/settings.json (idempotent — not overwritten)."
 fi
 ```
 
-The template pre-approves the routine `git`, `gh`, `npm`, Read/Write/Edit, and agent-dispatch operations the ADLC pipeline fires. Destructive operations (`rm -rf`, `git reset --hard`, `gh pr merge`, `./deploy.sh`, `terraform apply/destroy`, force-push to `main`) remain on the **ask** list so a human still confirms the one-way moves. Customize for project-specific commands (e.g., add `Bash(cd app && ./deploy.sh:*)` for iOS deploys) by editing `.claude/settings.json` directly.
+The template pre-approves the routine `git`, `gh`, `npm`, Read/Write/Edit, and agent-dispatch operations the ADLC pipeline fires. Destructive operations (`rm -rf`, `git reset --hard`, `gh pr merge`, `./deploy.sh`, `terraform apply/destroy`, force-push to `main`) remain on the **ask** list so a human still confirms the one-way moves.
 
 The template also wires two Claude Code hooks (`Stop` and `UserPromptSubmit`) that emit one JSONL event per turn boundary to `~/.adlc/runtime/user-wait.jsonl`. The sprint dashboard tails this log to compute per-REQ "user wait" idle time. Zero overhead when the dashboard isn't running.
 
-**How this takes effect.** Claude Code auto-reloads `.claude/settings.json` on file change — no `/clear`, no restart, no in-session reload command needed. The project-level `defaultMode` and allowlist take effect on the next Bash call after the file is written. For the few commands Step 1.6 itself runs (`mkdir -p .claude`, `cp ~/.claude/skills-mulesoft/templates/...`), you may see one or two prompts — those fire BEFORE the file exists. Everything after Step 1.6 runs silently.
+**How this takes effect.** Claude Code auto-reloads `.claude/settings.json` on file change — no `/clear`, no restart, no in-session reload command needed.
 
-**Per-developer mode override.** The template's `defaultMode` is `bypassPermissions` because `/sprint` and `/proceed` run unattended pipelines. Each developer can override per-project in `.claude/settings.local.json` (gitignored by Claude Code) — e.g., set `permissions.defaultMode` to `acceptEdits` if you want manual approval on Bash commands when you're hand-coding. User-level `~/.claude/settings.json` is the cross-project default; project `settings.json` overrides user; project `settings.local.json` overrides project.
+**Per-developer mode override.** The template's `defaultMode` is `bypassPermissions` because `/sprint` and `/proceed` run unattended pipelines. Each developer can override per-project in `.claude/settings.local.json` (gitignored by Claude Code).
 
 Tell the user: "`.claude/settings.json` was scaffolded with a default allowlist plus user-wait hooks. **Commit this file** — it is team-shared. Use `.claude/settings.local.json` (gitignored) for personal overrides like a stricter `defaultMode`."
 
-If `.claude/settings.json` was preserved as-is, run the Step 8.5 hook backfill below now (don't wait for Step 8.5) — same idempotent merge logic.
+### Step 1.7: Wire Project-Local Skill Symlinks (CRITICAL — makes all other slash commands stack-aware)
+
+After `/init`, every other ADLC slash command (`/architect`, `/proceed`, `/spec`, `/sprint`, `/wrapup`, etc.) must resolve to the **same toolkit** the project was initialized with. Claude Code resolves slash commands by checking `<project>/.claude/skills/<name>/SKILL.md` *before* falling back to `~/.claude/skills/<name>/SKILL.md` — so a project-local symlink that points each skill to the chosen toolkit guarantees correct resolution regardless of what `~/.claude/skills` globally points to.
+
+This step creates one symlink per top-level skill in `<project>/.claude/skills/`. It does **not** symlink the whole `.claude/skills/` directory (so installations like Mule's `mule-development` skill pack — which lives at `.claude/skills/mule-development/` — can co-exist).
+
+```bash
+. "$HOME/.adlc/runtime/init-state.sh"
+
+mkdir -p .claude/skills
+
+# Discover top-level skills in the toolkit (any subdir containing SKILL.md).
+created=0
+preserved=0
+relinked=0
+for skill_dir in "$TOOLKIT_HOME"/*/; do
+  [ -f "$skill_dir/SKILL.md" ] || continue
+  name=$(basename "$skill_dir")
+  dest=".claude/skills/$name"
+
+  if [ -L "$dest" ]; then
+    # Already a symlink. If it points elsewhere, repoint to current TOOLKIT_HOME
+    # (handles toolkit relocation between init runs).
+    cur_target=$(readlink "$dest" 2>/dev/null || true)
+    expected="$skill_dir"
+    expected="${expected%/}"
+    if [ "$cur_target" != "$expected" ]; then
+      ln -sfn "$expected" "$dest"
+      relinked=$((relinked + 1))
+    else
+      preserved=$((preserved + 1))
+    fi
+  elif [ -e "$dest" ]; then
+    # A real directory or file lives there — DO NOT overwrite (could be a
+    # locally-customized skill or, for Mule, the installed mule-development
+    # skill pack). Surface and skip.
+    echo "  WARN: .claude/skills/$name exists and is not a symlink — preserved as-is."
+    preserved=$((preserved + 1))
+  else
+    ln -s "${skill_dir%/}" "$dest"
+    created=$((created + 1))
+  fi
+done
+
+echo "Project-local skill symlinks: created=$created  relinked=$relinked  preserved=$preserved"
+echo "All ADLC slash commands in this project now resolve to: $TOOLKIT_HOME"
+```
+
+The user should add `.claude/skills/` to git so the team gets the same resolution. (The symlinks are stable across machines as long as the toolkit lives at the same absolute path; otherwise re-running `/init` fixes them. For checked-in stability, a future enhancement could replace symlinks with thin proxy SKILL.md files — out of scope for now.)
 
 ### Step 2: Gather Project Context
 Ask the user for the following (skip any that are already known from existing files):
@@ -95,16 +312,18 @@ Ask the user for the following (skip any that are already known from existing fi
 If a `CLAUDE.md`, `README.md`, or `package.json` exists, extract this info automatically and confirm with the user instead of asking.
 
 ### Step 3: Create Directory Structure
+
+The directory layout differs slightly between SFDC and MuleSoft (different catalog/rules filenames). Use the layout matching `$STACK`.
+
+**Common to both stacks:**
 ```
 .adlc/
-  ETHOS.md               # Copy of ~/.claude/skills-mulesoft/ETHOS.md — ensures skills work inside git worktrees
+  ETHOS.md
   context/
-    project-overview.md    # What the project does, tech stack, scope
-    architecture.md        # System diagram, layers, key patterns, ADRs
-    conventions.md         # File organization, naming, testing, git conventions
-    taxonomy.md            # Retrieval tag vocabulary (component/domain/stack/concerns)
-    mule-skills-catalog.md # File-glob → skill+rubric dispatch table — required by /architect, task-implementer, Phase 5 reviewers
-    mulesoft-rules.md      # Always-on rules baseline (anypoint-cli-v4, kebab-case names, error-handler per flow, DW 2.0, no Thread.sleep, etc.)
+    project-overview.md
+    architecture.md
+    conventions.md
+    taxonomy.md
   specs/
     .gitkeep
   bugs/
@@ -114,20 +333,28 @@ If a `CLAUDE.md`, `README.md`, or `package.json` exists, extract this info autom
       .gitkeep
     lessons/
       .gitkeep
-  templates/             # Copies of ~/.claude/skills-mulesoft/templates/*.md — ensures skills work inside git worktrees
-    assumption-template.md
-    bug-template.md
-    lesson-template.md
-    requirement-template.md
-    task-template.md
-  partials/              # Copies of ~/.claude/skills-mulesoft/partials/*.sh — shared shell snippets sourced by SKILL.md files
-    ethos-include.sh
-  workflows/             # Copies of ~/.claude/skills-mulesoft/workflows/ RUNTIME files only — Dynamic Workflow scripts used by the workflow engine
-    adlc-sprint.workflow.js   # ONE self-contained file: meta first, schemas + pure helpers inlined behind // ==== BEGIN/END PURE ==== (runtime has no require)
-    README.md            # NOTE: workflows/tests/ is intentionally NOT copied — those are toolkit-internal node:test files (no consumer relevance)
+  templates/
+  partials/
+  workflows/
 ```
 
-**Why the local copies of ETHOS.md, templates, partials, and workflows?** Claude Code's sandbox blocks the `Read` tool from accessing paths outside the current working directory. When a skill runs inside a git worktree (e.g., `.claude/worktrees/<name>/`), `~/.claude/skills-mulesoft/ETHOS.md`, `~/.claude/skills-mulesoft/templates/*.md`, `~/.claude/skills-mulesoft/partials/*.sh`, and `~/.claude/skills-mulesoft/workflows/*` become unreadable by subagents and any tool that uses `Read` mid-skill. Keeping copies under `.adlc/` makes the toolkit work identically in main checkouts and worktrees.
+**SFDC-only additions** (`$STACK = sfdc`):
+```
+.adlc/context/
+  sf-skills-catalog.md
+  salesforce-rules.md
+```
+
+**MuleSoft-only additions** (`$STACK = mulesoft`):
+```
+.adlc/context/
+  mule-skills-catalog.md
+  mulesoft-rules.md
+.adlc/partials/
+  mule-quality-checklist.md
+```
+
+**Why the local copies of ETHOS.md, templates, partials, and workflows?** Claude Code's sandbox blocks the `Read` tool from accessing paths outside the current working directory. When a skill runs inside a git worktree (e.g., `.claude/worktrees/<name>/`), `$TOOLKIT_HOME/...` becomes unreadable by subagents. Keeping copies under `.adlc/` makes the toolkit work identically in main checkouts and worktrees.
 
 ### Step 4: Populate Context Files
 
@@ -192,7 +419,6 @@ Add the following entries to the project's `.gitignore` (create it if it doesn't
 .claude/settings.local.json
 
 # ADLC per-project ID counters and locks — transient state; rebuilt on demand
-# from existing artifacts (see partials/id-counter.sh). Do not commit.
 .adlc/.next-req
 .adlc/.next-bug
 .adlc/.next-lesson
@@ -200,63 +426,57 @@ Add the following entries to the project's `.gitignore` (create it if it doesn't
 .adlc/.next-bug.lock.d/
 .adlc/.next-lesson.lock.d/
 .adlc/.cache/
+
+# Playwright session tokens & test artifacts
+tests/e2e/storageState.json
+reports/playwright/
+playwright-report/
+test-results/
 ```
 
-### Step 6: Copy ETHOS.md and Templates Into the Project
+### Step 6: Copy ETHOS.md, Templates, Partials, and Workflows Into the Project
 
-Copy the canonical ETHOS.md and all templates from the toolkit into the project so skills keep working inside git worktrees (where Read is sandboxed to the worktree root).
+Copy the canonical ETHOS.md and all templates/partials/workflows from the toolkit into the project so skills keep working inside git worktrees (where Read is sandboxed to the worktree root).
 
 ```bash
-# Verify source exists
-if [ ! -f ~/.claude/skills-mulesoft/ETHOS.md ] || [ ! -d ~/.claude/skills-mulesoft/templates ] || [ ! -d ~/.claude/skills-mulesoft/partials ] || [ ! -d ~/.claude/skills-mulesoft/workflows ]; then
-  echo "ERROR: Toolkit not found at ~/.claude/skills-mulesoft/. Ensure ~/.claude/skills is symlinked to the adlc-toolkit repo."
+. "$HOME/.adlc/runtime/init-state.sh"
+
+# Verify sources exist
+if [ ! -f "$TOOLKIT_HOME/ETHOS.md" ] || [ ! -d "$TOOLKIT_HOME/templates" ] || [ ! -d "$TOOLKIT_HOME/partials" ] || [ ! -d "$TOOLKIT_HOME/workflows" ]; then
+  echo "ERROR: Toolkit at $TOOLKIT_HOME appears corrupted (missing ETHOS.md / templates / partials / workflows)."
   exit 1
 fi
 
 # Copy ETHOS.md (overwrite — canonical is source of truth)
-cp ~/.claude/skills-mulesoft/ETHOS.md .adlc/ETHOS.md
+cp "$TOOLKIT_HOME/ETHOS.md" .adlc/ETHOS.md
 
 # Copy templates (overwrite — canonical is source of truth)
 mkdir -p .adlc/templates
-cp ~/.claude/skills-mulesoft/templates/*.md .adlc/templates/
+cp "$TOOLKIT_HOME/templates"/*.md .adlc/templates/
 
-# Copy partials (overwrite — canonical is source of truth). These are POSIX
-# shell snippets sourced by SKILL.md files (e.g., ethos-include.sh).
+# Copy partials (overwrite — canonical is source of truth)
 mkdir -p .adlc/partials
-cp ~/.claude/skills-mulesoft/partials/*.sh .adlc/partials/
+cp "$TOOLKIT_HOME/partials"/*.sh .adlc/partials/
 chmod +x .adlc/partials/*.sh
 
-# Copy workflows (overwrite — canonical is source of truth). These are the
-# Dynamic Workflow scripts the workflow engine runs (e.g.,
-# adlc-sprint.workflow.js — ONE self-contained file with schemas + pure helpers
-# inlined, since the runtime has no require). Resolved via the two-level fallback
-# (.adlc/workflows/... -> ~/.claude/skills-mulesoft/workflows/...) so the engine works
-# inside git worktrees where Read is sandboxed to the worktree root.
-#
-# Copy ONLY the runtime files: the workflow script(s) and the top-level README.
-# Do NOT copy workflows/tests/ — those are toolkit-internal `node:test` unit
-# tests for the inlined PURE helpers, with no consumer relevance. The engine is
-# ONE self-contained file (no require/import/fs), so globbing *.workflow.js
-# captures everything the runtime ever resolves.
+# Copy workflows — RUNTIME files only. Do NOT copy workflows/tests/ — those
+# are toolkit-internal node:test files (CommonJS require) that break Jest in
+# "type":"module" consumer repos.
 mkdir -p .adlc/workflows
-cp ~/.claude/skills-mulesoft/workflows/*.workflow.js .adlc/workflows/
-cp ~/.claude/skills-mulesoft/workflows/README.md .adlc/workflows/
-# Idempotent cleanup: remove a stale tests/ dir left by an OLDER /init that did
-# `cp -R` of the whole workflows tree. Heals already-initialized repos on re-run;
-# safe no-op when absent. (Belt-and-suspenders to the explicit-file copy above.)
+cp "$TOOLKIT_HOME/workflows"/*.workflow.js .adlc/workflows/
+cp "$TOOLKIT_HOME/workflows/README.md" .adlc/workflows/
 rm -rf .adlc/workflows/tests
 
-# Clean up Finder-style duplicates if present. Matches:
-#   - .md files: "requirement-template 2.md"
-#   - non-.md files: "pipeline-state 2.json", ".next-bug 2"
-#   - directories: "knowledge 2", "specs 2"
-# The `-depth` flag processes directory contents before the directory itself,
-# so `rm -rf` on a "* 2" dir doesn't fail due to prior deletions.
+# Clean up Finder-style duplicates if present (".adlc/* 2.md", "knowledge 2/", etc.)
 find .adlc -depth \( -name "* 2" -o -name "* 2.*" \) -exec rm -rf {} + 2>/dev/null
 
+# Advisory (Jest repos)
+if grep -q '"jest"' package.json 2>/dev/null || find . -maxdepth 1 -name 'jest.config.*' 2>/dev/null | grep -q .; then
+  echo "ADVISORY (Jest detected): .adlc/ contains no test files by design — default 'npm test' is unaffected. If you use a custom broad testMatch, add \"<rootDir>/.adlc/\" to testPathIgnorePatterns."
+fi
 ```
 
-If the user has previously made intentional customizations to their local `.adlc/ETHOS.md`, `.adlc/templates/*.md`, `.adlc/partials/*.sh`, or `.adlc/workflows/adlc-sprint.workflow.js`, confirm before overwriting. Use `/template-drift` to surface what differs (it also flags a stale `.adlc/workflows/tests/` left by an older `/init`). Typical drift (stale copies) should be overwritten silently.
+If the user has previously made intentional customizations to their local `.adlc/ETHOS.md`, `.adlc/templates/*.md`, `.adlc/partials/*.sh`, or `.adlc/workflows/adlc-sprint.workflow.js`, confirm before overwriting. Use `/template-drift` to surface what differs.
 
 ### Step 7: Scaffold Retrieval Taxonomy
 
@@ -265,218 +485,206 @@ Copy the canonical taxonomy template to `.adlc/context/taxonomy.md` so authors o
 **This step is idempotent — skip if the file already exists** (preserve any project-local customizations).
 
 ```bash
-# Verify source exists
-if [ ! -f ~/.claude/skills-mulesoft/templates/taxonomy-template.md ]; then
-  echo "ERROR: Taxonomy template not found at ~/.claude/skills-mulesoft/templates/taxonomy-template.md. Ensure ~/.claude/skills is symlinked to the adlc-toolkit repo."
+. "$HOME/.adlc/runtime/init-state.sh"
+
+if [ ! -f "$TOOLKIT_HOME/templates/taxonomy-template.md" ]; then
+  echo "ERROR: Taxonomy template not found at $TOOLKIT_HOME/templates/taxonomy-template.md."
   exit 1
 fi
 
-# Ensure destination directory exists (safe if Step 3 already created it)
 mkdir -p .adlc/context
 
-# Idempotent copy: only copy if destination does not already exist
 if [ ! -f .adlc/context/taxonomy.md ]; then
-  cp ~/.claude/skills-mulesoft/templates/taxonomy-template.md .adlc/context/taxonomy.md
+  cp "$TOOLKIT_HOME/templates/taxonomy-template.md" .adlc/context/taxonomy.md
   echo "Created .adlc/context/taxonomy.md from canonical template."
 else
   echo "Preserved existing .adlc/context/taxonomy.md (idempotent — not overwritten)."
 fi
 ```
 
-Advise the user: "Open `.adlc/context/taxonomy.md` and customize the example values for this codebase. Authors of new REQs, bugs, and lessons will reference this file when choosing tag values (`component`, `domain`, `stack`, `concerns`). The `tags` dimension stays free-form."
+Advise the user: "Open `.adlc/context/taxonomy.md` and customize the example values for this codebase. Authors of new REQs, bugs, and lessons will reference this file when choosing tag values (`component`, `domain`, `stack`, `concerns`)."
 
-### Step 7.5: Scaffold MuleSoft skills catalog, rules, and quality checklist
+### Step 7.5: Scaffold stack-specific skills catalog & rules
 
-Copy the canonical MuleSoft skill dispatch table (`mule-skills-catalog.md`), the rules baseline (`mulesoft-rules.md`), and the Mule quality checklist (`partials/mule-quality-checklist.md`) into the consumer repo. These are required by:
-- `/architect` — to look up which orchestrator skills (official MuleSoft pack + toolkit rubrics) to load based on spec signals
-- `task-implementer` agent — to look up rubrics from the **File-glob → rubric+skill dispatch** table
-- Phase 5 reviewer agents — same lookup, applied to the diff
-- `/proceed` Phase 5 — to know what counts as Mule artifacts for the validate gate
-
-Without these files in the consumer repo, the architect/implementer/reviewers fall back to first-principles reasoning, which is the failure mode that ships hand-rolled `pom.xml` + `src/main/mule/` scaffolding instead of `create-project-template` output (and similar drift across every artifact family).
-
-**This step is idempotent — these files are *templates*, not customization surfaces.** Overwrite existing copies silently to keep them in sync with the toolkit; if the user has hand-edited either, surface a `/template-drift` advisory.
+Copy the canonical skills dispatch table and rules baseline into the consumer repo's `.adlc/context/`. Branches on `$STACK`.
 
 ```bash
-# Verify sources exist
-TOOLKIT_CTX="$HOME/.claude/skills-mulesoft/.adlc/context"
-TOOLKIT_PARTIALS="$HOME/.claude/skills-mulesoft/partials"
-if [ ! -f "$TOOLKIT_CTX/mule-skills-catalog.md" ] || [ ! -f "$TOOLKIT_CTX/mulesoft-rules.md" ] || [ ! -f "$TOOLKIT_PARTIALS/mule-quality-checklist.md" ]; then
-  echo "ERROR: MuleSoft context files not found at $TOOLKIT_CTX or $TOOLKIT_PARTIALS. Ensure ~/.claude/skills-mulesoft is symlinked to the adlc-toolkit-mulesoft repo."
-  exit 1
-fi
+. "$HOME/.adlc/runtime/init-state.sh"
 
-mkdir -p .adlc/context .adlc/partials
+mkdir -p .adlc/context
 
-# Catalog: overwrite — canonical, machine-consumed dispatch table
-cp "$TOOLKIT_CTX/mule-skills-catalog.md" .adlc/context/mule-skills-catalog.md
-echo "Synced .adlc/context/mule-skills-catalog.md from toolkit canonical."
-
-# Rules: overwrite if missing or unchanged. Skip overwrite if hand-customized;
-# surface a /template-drift advisory instead.
-if [ ! -f .adlc/context/mulesoft-rules.md ]; then
-  cp "$TOOLKIT_CTX/mulesoft-rules.md" .adlc/context/mulesoft-rules.md
-  echo "Created .adlc/context/mulesoft-rules.md from toolkit canonical."
-else
-  if ! cmp -s "$TOOLKIT_CTX/mulesoft-rules.md" .adlc/context/mulesoft-rules.md; then
-    echo "Preserved existing .adlc/context/mulesoft-rules.md (differs from toolkit). Run /template-drift to review and sync."
-  else
-    echo "Preserved existing .adlc/context/mulesoft-rules.md (already in sync)."
+if [ "$STACK" = "sfdc" ]; then
+  TOOLKIT_CTX="$TOOLKIT_HOME/.adlc/context"
+  if [ ! -f "$TOOLKIT_CTX/sf-skills-catalog.md" ] || [ ! -f "$TOOLKIT_CTX/salesforce-rules.md" ]; then
+    echo "ERROR: Salesforce context files not found at $TOOLKIT_CTX. Toolkit appears corrupted."
+    exit 1
   fi
-fi
 
-# Quality checklist: overwrite — derived from rules, no customization expected.
-cp "$TOOLKIT_PARTIALS/mule-quality-checklist.md" .adlc/partials/mule-quality-checklist.md
-echo "Synced .adlc/partials/mule-quality-checklist.md from toolkit canonical."
-```
+  # Catalog: overwrite — canonical, machine-consumed dispatch table
+  cp "$TOOLKIT_CTX/sf-skills-catalog.md" .adlc/context/sf-skills-catalog.md
+  echo "Synced .adlc/context/sf-skills-catalog.md from toolkit canonical."
 
-For non-MuleSoft projects, `/init` should not have been run from this toolkit — use `adlc-toolkit-sfdc` for Salesforce projects or the generic ADLC toolkit for other stacks. This step is mandatory for every MuleSoft consumer.
-
-### Step 7.6: Validate MuleSoft prerequisites & install official skill pack
-
-The MuleSoft toolkit depends on:
-1. Node.js 20+ (for `npx skills add`, `mulesoft-mcp-server`, `mcp-remote`)
-2. JDK 17 (LTS) + Maven 3.8+
-3. `anypoint-cli-v4` installed and authenticated (`anypoint-cli-v4 conf client_id <ID>` / `client_secret <SECRET>`)
-4. `anypoint-cli-dx-mule-plugin` installed (validated by `build-mule-integration` skill at startup)
-5. Anypoint Extension Pack 1.10.0+ in VSCode (advisory — required at IDE-time, not init-time)
-6. TWO Anypoint connected apps:
-   - **DX MCP** — connected app *acting on its own behalf* (client credentials). Scopes: Mule Developer Generative AI User, Monitoring Viewer, Manage API Configuration, View APIs Configuration, Manage Policies, Exchange Contributor (or higher), Read/Create Applications, Read Runtime Fabrics, CloudHub Network Viewer, Usage Viewer.
-   - **Platform MCP** — connected app *acting on user's behalf* with Authorization Code + Refresh Token grant types. Scopes: Exchange Viewer/Contributor, API Manager Environment Viewer/Admin, Monitoring Viewer, Governance Viewer/Administrator, Manage Application Data; plus Background Access, Profile, Identity, Email.
-
-Validate prerequisites and install the official MuleSoft skill pack at the consumer level via `npx skills add`:
-
-```bash
-# 1. Node version check
-node_version=$(node --version 2>/dev/null | sed 's/^v//' | cut -d. -f1 || echo 0)
-if [ "${node_version:-0}" -lt 20 ] 2>/dev/null; then
-  echo "ERROR: Node.js 20+ required (found ${node_version:-none}). Install from https://nodejs.org/"
-  exit 1
-fi
-
-# 2. Java version check
-if ! command -v java >/dev/null 2>&1; then
-  echo "ERROR: Java not found. Install JDK 17 (LTS)."
-  exit 1
-fi
-java_version=$(java -version 2>&1 | head -1 | sed -E 's/.*"([0-9]+).*/\1/')
-if [ "${java_version:-0}" -lt 17 ] 2>/dev/null; then
-  echo "WARN: Java ${java_version:-unknown} detected — Mule 4.6+ runtime requires JDK 17 (LTS). Mule may fail to build."
-fi
-
-# 3. Maven check
-if ! command -v mvn >/dev/null 2>&1; then
-  echo "ERROR: Maven 3.8+ required. Install via brew/apt/sdkman."
-  exit 1
-fi
-
-# 4. anypoint-cli-v4 check
-if ! command -v anypoint-cli-v4 >/dev/null 2>&1; then
-  echo "ERROR: anypoint-cli-v4 not found. Install: npm install -g @mulesoft/anypoint-cli-v4"
-  echo "  Then authenticate: anypoint-cli-v4 conf client_id <ID>; anypoint-cli-v4 conf client_secret <SECRET>"
-  exit 1
-fi
-
-# 5. Connected-app credentials check (env vars)
-missing_creds=""
-[ -z "${ANYPOINT_CLIENT_ID:-}" ] && missing_creds="${missing_creds}  - ANYPOINT_CLIENT_ID (DX MCP)\n"
-[ -z "${ANYPOINT_CLIENT_SECRET:-}" ] && missing_creds="${missing_creds}  - ANYPOINT_CLIENT_SECRET (DX MCP)\n"
-[ -z "${ANYPOINT_PLATFORM_CLIENT_ID:-}" ] && missing_creds="${missing_creds}  - ANYPOINT_PLATFORM_CLIENT_ID (Platform MCP)\n"
-[ -z "${ANYPOINT_PLATFORM_CLIENT_SECRET:-}" ] && missing_creds="${missing_creds}  - ANYPOINT_PLATFORM_CLIENT_SECRET (Platform MCP)\n"
-if [ -n "$missing_creds" ]; then
-  echo "WARN: Missing connected-app credentials in environment:"
-  printf "$missing_creds"
-  echo "  Without these, the MCP servers wired in .mcp.json will fail to start."
-  echo "  Two options:"
-  echo "    1. Export them in your shell rc: export ANYPOINT_CLIENT_ID=..."
-  echo "    2. Create a project-local .env (gitignored) and source before running Claude Code."
-  echo "  See README.md 'Consumer prerequisites' for connected-app setup."
-fi
-
-# 6. Install the official MuleSoft skill pack
-if [ -d .claude/skills/mule-development ] || [ -d .agents/skills/mule-development ]; then
-  echo "Official MuleSoft skill pack already installed — skipping."
-else
-  echo "Installing official MuleSoft skill pack via npx skills add..."
-  if npx -y skills add mulesoft/mulesoft-dx/skills/mule-development --target claude-code --scope project --method symlink; then
-    echo "  Done."
+  # Rules: overwrite if missing or unchanged. If hand-customized, surface a /template-drift advisory.
+  if [ ! -f .adlc/context/salesforce-rules.md ]; then
+    cp "$TOOLKIT_CTX/salesforce-rules.md" .adlc/context/salesforce-rules.md
+    echo "Created .adlc/context/salesforce-rules.md from toolkit canonical."
   else
-    echo "WARN: 'npx skills add mulesoft/mulesoft-dx/skills/mule-development' failed."
-    echo "  Re-run manually after fixing the cause (commonly: anypoint-cli-v4 not authenticated, or anypoint-cli-dx-mule-plugin missing)."
+    if ! cmp -s "$TOOLKIT_CTX/salesforce-rules.md" .adlc/context/salesforce-rules.md; then
+      echo "Preserved existing .adlc/context/salesforce-rules.md (differs from toolkit). Run /template-drift to review and sync."
+    else
+      echo "Preserved existing .adlc/context/salesforce-rules.md (already in sync)."
+    fi
   fi
+
+elif [ "$STACK" = "mulesoft" ]; then
+  TOOLKIT_CTX="$TOOLKIT_HOME/.adlc/context"
+  TOOLKIT_PARTIALS="$TOOLKIT_HOME/partials"
+  if [ ! -f "$TOOLKIT_CTX/mule-skills-catalog.md" ] || [ ! -f "$TOOLKIT_CTX/mulesoft-rules.md" ] || [ ! -f "$TOOLKIT_PARTIALS/mule-quality-checklist.md" ]; then
+    echo "ERROR: MuleSoft context files not found at $TOOLKIT_CTX or $TOOLKIT_PARTIALS. Toolkit appears corrupted."
+    exit 1
+  fi
+
+  mkdir -p .adlc/partials
+
+  cp "$TOOLKIT_CTX/mule-skills-catalog.md" .adlc/context/mule-skills-catalog.md
+  echo "Synced .adlc/context/mule-skills-catalog.md from toolkit canonical."
+
+  if [ ! -f .adlc/context/mulesoft-rules.md ]; then
+    cp "$TOOLKIT_CTX/mulesoft-rules.md" .adlc/context/mulesoft-rules.md
+    echo "Created .adlc/context/mulesoft-rules.md from toolkit canonical."
+  else
+    if ! cmp -s "$TOOLKIT_CTX/mulesoft-rules.md" .adlc/context/mulesoft-rules.md; then
+      echo "Preserved existing .adlc/context/mulesoft-rules.md (differs from toolkit). Run /template-drift to review and sync."
+    else
+      echo "Preserved existing .adlc/context/mulesoft-rules.md (already in sync)."
+    fi
+  fi
+
+  cp "$TOOLKIT_PARTIALS/mule-quality-checklist.md" .adlc/partials/mule-quality-checklist.md
+  echo "Synced .adlc/partials/mule-quality-checklist.md from toolkit canonical."
 fi
 ```
 
-### Step 7.7: Wire `.mcp.json` for DX MCP and Platform MCP
+Without these files in the consumer repo, the architect/implementer/reviewers fall back to first-principles reasoning, which is the failure mode that ships hand-rolled scaffolding instead of canonical generator output.
+
+### Step 7.6: (MuleSoft only) Validate prerequisites & install official skill pack
+
+**Skip this step entirely if `$STACK = sfdc`.**
+
+The MuleSoft toolkit depends on Node 20+, JDK 17, Maven 3.8+, `anypoint-cli-v4`, two Anypoint connected apps (DX MCP + Platform MCP), and the official `mulesoft/mulesoft-dx/skills/mule-development` skill pack.
+
+```bash
+. "$HOME/.adlc/runtime/init-state.sh"
+
+if [ "$STACK" != "mulesoft" ]; then
+  echo "Step 7.6 skipped — not a MuleSoft project."
+else
+  # 1. Node version check
+  node_version=$(node --version 2>/dev/null | sed 's/^v//' | cut -d. -f1 || echo 0)
+  if [ "${node_version:-0}" -lt 20 ] 2>/dev/null; then
+    echo "ERROR: Node.js 20+ required (found ${node_version:-none}). Install from https://nodejs.org/"
+    exit 1
+  fi
+
+  # 2. Java version check
+  if ! command -v java >/dev/null 2>&1; then
+    echo "ERROR: Java not found. Install JDK 17 (LTS)."
+    exit 1
+  fi
+  java_version=$(java -version 2>&1 | head -1 | sed -E 's/.*"([0-9]+).*/\1/')
+  if [ "${java_version:-0}" -lt 17 ] 2>/dev/null; then
+    echo "WARN: Java ${java_version:-unknown} detected — Mule 4.6+ runtime requires JDK 17 (LTS). Mule may fail to build."
+  fi
+
+  # 3. Maven check
+  if ! command -v mvn >/dev/null 2>&1; then
+    echo "ERROR: Maven 3.8+ required. Install via brew/apt/sdkman."
+    exit 1
+  fi
+
+  # 4. anypoint-cli-v4 check
+  if ! command -v anypoint-cli-v4 >/dev/null 2>&1; then
+    echo "ERROR: anypoint-cli-v4 not found. Install: npm install -g @mulesoft/anypoint-cli-v4"
+    echo "  Then authenticate: anypoint-cli-v4 conf client_id <ID>; anypoint-cli-v4 conf client_secret <SECRET>"
+    exit 1
+  fi
+
+  # 5. Connected-app credentials check (env vars)
+  missing_creds=""
+  [ -z "${ANYPOINT_CLIENT_ID:-}" ] && missing_creds="${missing_creds}  - ANYPOINT_CLIENT_ID (DX MCP)\n"
+  [ -z "${ANYPOINT_CLIENT_SECRET:-}" ] && missing_creds="${missing_creds}  - ANYPOINT_CLIENT_SECRET (DX MCP)\n"
+  [ -z "${ANYPOINT_PLATFORM_CLIENT_ID:-}" ] && missing_creds="${missing_creds}  - ANYPOINT_PLATFORM_CLIENT_ID (Platform MCP)\n"
+  [ -z "${ANYPOINT_PLATFORM_CLIENT_SECRET:-}" ] && missing_creds="${missing_creds}  - ANYPOINT_PLATFORM_CLIENT_SECRET (Platform MCP)\n"
+  if [ -n "$missing_creds" ]; then
+    echo "WARN: Missing connected-app credentials in environment:"
+    printf "$missing_creds"
+    echo "  Without these, the MCP servers wired in .mcp.json will fail to start."
+    echo "  Two options:"
+    echo "    1. Export them in your shell rc: export ANYPOINT_CLIENT_ID=..."
+    echo "    2. Create a project-local .env (gitignored) and source before running Claude Code."
+  fi
+
+  # 6. Install the official MuleSoft skill pack
+  if [ -d .claude/skills/mule-development ] || [ -d .agents/skills/mule-development ]; then
+    echo "Official MuleSoft skill pack already installed — skipping."
+  else
+    echo "Installing official MuleSoft skill pack via npx skills add..."
+    if npx -y skills add mulesoft/mulesoft-dx/skills/mule-development --target claude-code --scope project --method symlink; then
+      echo "  Done."
+    else
+      echo "WARN: 'npx skills add mulesoft/mulesoft-dx/skills/mule-development' failed."
+      echo "  Re-run manually after fixing the cause (commonly: anypoint-cli-v4 not authenticated, or anypoint-cli-dx-mule-plugin missing)."
+    fi
+  fi
+fi
+```
+
+### Step 7.7: (MuleSoft only) Wire `.env.example` for connected-app credentials
+
+**Skip this step entirely if `$STACK = sfdc`.**
 
 The `templates/claude-settings-template.json` already includes the `mcpServers` block. Step 1.6 copied that to `.claude/settings.json`. This step generates a project-local `.env.example` so contributors know which env vars to populate, and confirms `.env` is gitignored.
 
 ```bash
-# Create .env.example documenting the required env vars
-if [ ! -f .env.example ]; then
-  cat > .env.example <<'EOF'
+. "$HOME/.adlc/runtime/init-state.sh"
+
+if [ "$STACK" = "mulesoft" ]; then
+  if [ ! -f .env.example ]; then
+    cat > .env.example <<'EOF'
 # MuleSoft connected-app credentials. Copy this file to .env (gitignored)
 # and fill in your Client ID / Secret values from Anypoint Platform.
 #
 # DX MCP — connected app acting on its own behalf (client credentials grant).
-# Scopes: Mule Developer Generative AI User, Monitoring Viewer, Manage API
-# Configuration, View APIs Configuration, Manage Policies, Exchange
-# Contributor, Read/Create Applications, Read Runtime Fabrics, CloudHub
-# Network Viewer, Usage Viewer.
 ANYPOINT_CLIENT_ID=
 ANYPOINT_CLIENT_SECRET=
-# PROD_US | PROD_EU | PROD_CA | PROD_JP | PROD_IN
 ANYPOINT_REGION=PROD_US
 
 # Platform MCP — connected app acting on user's behalf (Authorization Code +
-# Refresh Token grant). Scopes: Exchange Viewer/Contributor, API Manager
-# Environment Viewer/Admin, Monitoring Viewer, Governance Viewer/Administrator,
-# Manage Application Data; plus Background Access, Profile, Identity, Email.
+# Refresh Token grant).
 ANYPOINT_PLATFORM_CLIENT_ID=
 ANYPOINT_PLATFORM_CLIENT_SECRET=
 EOF
-  echo "Created .env.example documenting required MCP env vars."
+    echo "Created .env.example documenting required MCP env vars."
+  fi
+
+  if [ -f .gitignore ] && ! grep -q '^\.env$' .gitignore; then
+    echo ".env" >> .gitignore
+    echo "Added '.env' to .gitignore."
+  fi
 fi
-
-# Ensure .env is gitignored
-if [ -f .gitignore ] && ! grep -q '^\.env$' .gitignore; then
-  echo ".env" >> .gitignore
-  echo "Added '.env' to .gitignore."
-fi
 ```
 
-After Step 7.6 + 7.7, the consumer has:
-- Official MuleSoft skill pack installed under `.claude/skills/`
-- `.claude/settings.json` with `mcpServers` block wiring DX MCP (stdio) and Platform MCP (remote via `mcp-remote@latest`)
-- `.env.example` documenting the four required connected-app env vars
-- `.env` gitignored
+Document the connected-app setup steps in the project README so other developers can configure their machines (DX MCP + Platform MCP scopes — see toolkit README "Consumer prerequisites").
 
-Document the connected-app setup steps in the project README so other developers can configure their machines:
-
-```
-# Anypoint connected app — DX MCP (one acting on its own behalf)
-1. Anypoint Platform → Access Management → Connected Apps → Create Connected App
-2. App acts on its own behalf (client credentials)
-3. Apply scopes per Step 7.6 list
-4. Copy Client ID + Client Secret → set as ANYPOINT_CLIENT_ID / ANYPOINT_CLIENT_SECRET in .env
-
-# Anypoint connected app — Platform MCP (one acting on user's behalf)
-1. Same Connected Apps page → Create another
-2. App acts on behalf of user; grant types: Authorization Code + Refresh Token
-3. Apply scopes per Step 7.6 list
-4. Redirect URLs: add a localhost:* URL (mcp-remote auto-assigns a port; the docs suggest http://localhost:12148/oauth/callback as a starting point)
-5. Copy Client ID + Client Secret → set as ANYPOINT_PLATFORM_CLIENT_ID / ANYPOINT_PLATFORM_CLIENT_SECRET in .env
-```
-
-### Step 8: (moved to Step 1.6 — verify only)
-
-The settings allowlist scaffold now runs at Step 1.6, before the bulk of `/init`'s shell work, so subsequent steps don't trigger permission prompts. This step is now a verification gate: confirm `.claude/settings.json` exists. If it doesn't (e.g., Step 1.6 was skipped or hand-removed), run the Step 1.6 scaffold block now — same idempotent logic.
+### Step 8: Verify `.claude/settings.json` (Step 1.6 already created it)
 
 ```bash
+. "$HOME/.adlc/runtime/init-state.sh"
+
 if [ ! -f .claude/settings.json ]; then
   echo "WARN: .claude/settings.json missing — Step 1.6 should have created it. Re-running scaffold."
   mkdir -p .claude
-  cp ~/.claude/skills-mulesoft/templates/claude-settings-template.json .claude/settings.json
+  cp "$TOOLKIT_HOME/templates/claude-settings-template.json" .claude/settings.json
   echo "Created .claude/settings.json from canonical template (late fallback)."
 else
   echo "Verified .claude/settings.json present (created in Step 1.6)."
@@ -485,9 +693,11 @@ fi
 
 ### Step 8.5: Backfill user-wait hooks into pre-existing settings
 
-When `.claude/settings.json` already existed (Step 8 preserved it), it may pre-date the user-wait hooks added in this version of the template. Detect that case and merge in just the hook block — never overwrite the user's allowlist customizations.
+When `.claude/settings.json` already existed (Step 1.6 preserved it), it may pre-date the user-wait hooks added in this version of the template. Detect that case and merge in just the hook block — never overwrite the user's allowlist customizations.
 
 ```bash
+. "$HOME/.adlc/runtime/init-state.sh"
+
 if [ -f .claude/settings.json ] && ! grep -q '"UserPromptSubmit"' .claude/settings.json; then
   echo "Backfilling user-wait hooks into existing .claude/settings.json..."
   node -e '
@@ -507,74 +717,80 @@ if [ -f .claude/settings.json ] && ! grep -q '"UserPromptSubmit"' .claude/settin
 fi
 ```
 
-This step is safe to re-run: the `grep -q '"UserPromptSubmit"'` guard skips when the hooks are already present. If the user has hand-customized hooks in another shape, the merge will append rather than replace — verify with `cat .claude/settings.json` afterward.
+### Step 9: Scaffold `.adlc/config.yml` and resolve `project.shortname`
 
-### Step 9: Scaffold `.adlc/config.yml` and set `project.shortname`
-
-`.adlc/config.yml` is **required for every project** because the ADLC ID allocator (`partials/id-counter.sh`) reads `project.shortname` to namespace REQ / BUG / LESSON ids as `<XYZ>-REQ-NNN`. Without a shortname, `/spec`, `/bugfix`, and `/wrapup` all hard-fail. So this step is no longer optional.
+`.adlc/config.yml` is **required for every project** because the ADLC ID allocator reads `project.shortname` to namespace REQ / BUG / LESSON ids as `<XYZ>-REQ-NNN`.
 
 ```bash
-# Verify source exists
-if [ ! -f ~/.claude/skills-mulesoft/templates/config-template.yml ]; then
-  echo "ERROR: Config template not found at ~/.claude/skills-mulesoft/templates/config-template.yml."
+. "$HOME/.adlc/runtime/init-state.sh"
+
+if [ ! -f "$TOOLKIT_HOME/templates/config-template.yml" ]; then
+  echo "ERROR: Config template not found at $TOOLKIT_HOME/templates/config-template.yml."
   exit 1
 fi
 
 if [ ! -f .adlc/config.yml ]; then
-  cp ~/.claude/skills-mulesoft/templates/config-template.yml .adlc/config.yml
+  cp "$TOOLKIT_HOME/templates/config-template.yml" .adlc/config.yml
   echo "Created .adlc/config.yml from template."
 else
   echo "Preserved existing .adlc/config.yml."
 fi
 ```
 
-Then **resolve `project.shortname`** AND auto-fill the dependent placeholders so the config is usable end-to-end without any manual editing:
+Then **resolve `project.shortname`**:
 
-1. Ask the user: "Pick a 3-uppercase-letter shortname for this project (used in IDs like `XYZ-REQ-001`). Examples: `MUL` for MuleSoft-Integrations, `ORD` for Order-Process-API, `BNK` for Banking-Experience-API. Pick something unique across every repo on your machine — once specs exist, changing it requires a migration."
+1. Ask the user: "Pick a 3-uppercase-letter shortname for this project (used in IDs like `XYZ-REQ-001`). Pick something unique across every repo on your machine — once specs exist, changing it requires a migration."
+   - SFDC examples: `SFC` (Salesforce-Customer-360), `ORD` (Order-Mgmt), `PRT` (Partner-Portal)
+   - MuleSoft examples: `MUL` (MuleSoft-Integrations), `ORD` (Order-Process-API), `BNK` (Banking-Experience-API)
 2. Validate against `^[A-Z]{3}$`. Reject anything else and re-prompt.
-3. Write it under `project.shortname` in `.adlc/config.yml`. If a value already exists and matches the regex, preserve it; if it's the placeholder `XYZ`, prompt the user to set a real value.
-4. **Auto-fill the dependent fields** — these always derive from shortname + repo path, so there's no point asking for them separately:
-   - `mulesoft.app_prefix` → set to the resolved shortname (asset / policy / flow naming uses this prefix).
-   - `orgs.sandbox` → set to `basename(REPO_ROOT)` (the project directory name; CloudHub 2.0 / RTF deploys reference this as the default app name).
-
-   The user can override any of these by hand-editing `.adlc/config.yml` after `/init` completes — the auto-fill is a "good default" only. Re-running `/init` does not overwrite an already-customized value (the substitute runs only when the field still equals the template placeholder).
-
-The user must still **manually configure** these values per their Anypoint org (no sensible auto-default exists):
-- `mulesoft.anypoint_org_id` — the Anypoint Platform organization id (UUID)
-- `mulesoft.anypoint_environment` — Sandbox | Staging | Production
-- `mulesoft.anypoint_region` — PROD_US | PROD_EU | PROD_CA | PROD_JP | PROD_IN
-- `mulesoft.api_layer` — system | process | experience
-- `mulesoft.governance.required_policies` — when api_manager_enabled is true
+3. Write under `project.shortname` in `.adlc/config.yml`. If a value already exists and matches the regex, preserve it; if it's the placeholder `XYZ`, prompt for a real value.
+4. **Auto-fill the dependent fields** (stack-specific):
 
 ```bash
-# Auto-fill dependent placeholders. Each substitution is gated on the field
-# still being the template placeholder, so re-running /init never clobbers
-# a user-customized value.
+. "$HOME/.adlc/runtime/init-state.sh"
+
 PROJECT_DIR=$(basename "$(pwd)")
 SHORTNAME="$shortname"   # set by the prior validation block
 
-# mulesoft.app_prefix — default to project.shortname.
-if grep -qE '^[[:space:]]*app_prefix:[[:space:]]*"XYZ"[[:space:]]*$' .adlc/config.yml; then
-  sed -i.bak -E "s|^([[:space:]]*app_prefix:[[:space:]]*)\"XYZ\"|\1\"$SHORTNAME\"|" .adlc/config.yml && rm .adlc/config.yml.bak
-  echo "Set mulesoft.app_prefix='$SHORTNAME'"
-fi
+if [ "$STACK" = "sfdc" ]; then
+  # salesforce.app_prefix — default to project.shortname.
+  if grep -qE '^[[:space:]]*app_prefix:[[:space:]]*"XYZ"[[:space:]]*$' .adlc/config.yml; then
+    sed -i.bak -E "s|^([[:space:]]*app_prefix:[[:space:]]*)\"XYZ\"|\1\"$SHORTNAME\"|" .adlc/config.yml && rm .adlc/config.yml.bak
+    echo "Set salesforce.app_prefix='$SHORTNAME'"
+  fi
+  # salesforce.org_alias — default to basename of repo root.
+  if grep -qE '^[[:space:]]*org_alias:[[:space:]]*"<repo-basename>"[[:space:]]*$' .adlc/config.yml; then
+    sed -i.bak -E "s|^([[:space:]]*org_alias:[[:space:]]*)\"<repo-basename>\"|\1\"$PROJECT_DIR\"|" .adlc/config.yml && rm .adlc/config.yml.bak
+    echo "Set salesforce.org_alias='$PROJECT_DIR'"
+  fi
+  # orgs.sandbox — same convention.
+  if grep -qE '^[[:space:]]*sandbox:[[:space:]]*"<repo-basename>"[[:space:]]*$' .adlc/config.yml; then
+    sed -i.bak -E "s|^([[:space:]]*sandbox:[[:space:]]*)\"<repo-basename>\"|\1\"$PROJECT_DIR\"|" .adlc/config.yml && rm .adlc/config.yml.bak
+    echo "Set orgs.sandbox='$PROJECT_DIR'"
+  fi
 
-# orgs.sandbox — default to basename of repo root.
-if grep -qE '^[[:space:]]*sandbox:[[:space:]]*"<repo-basename>"[[:space:]]*$' .adlc/config.yml; then
-  sed -i.bak -E "s|^([[:space:]]*sandbox:[[:space:]]*)\"<repo-basename>\"|\1\"$PROJECT_DIR\"|" .adlc/config.yml && rm .adlc/config.yml.bak
-  echo "Set orgs.sandbox='$PROJECT_DIR'"
+elif [ "$STACK" = "mulesoft" ]; then
+  # mulesoft.app_prefix — default to project.shortname.
+  if grep -qE '^[[:space:]]*app_prefix:[[:space:]]*"XYZ"[[:space:]]*$' .adlc/config.yml; then
+    sed -i.bak -E "s|^([[:space:]]*app_prefix:[[:space:]]*)\"XYZ\"|\1\"$SHORTNAME\"|" .adlc/config.yml && rm .adlc/config.yml.bak
+    echo "Set mulesoft.app_prefix='$SHORTNAME'"
+  fi
+  # orgs.sandbox — default to basename of repo root.
+  if grep -qE '^[[:space:]]*sandbox:[[:space:]]*"<repo-basename>"[[:space:]]*$' .adlc/config.yml; then
+    sed -i.bak -E "s|^([[:space:]]*sandbox:[[:space:]]*)\"<repo-basename>\"|\1\"$PROJECT_DIR\"|" .adlc/config.yml && rm .adlc/config.yml.bak
+    echo "Set orgs.sandbox='$PROJECT_DIR'"
+  fi
 fi
 ```
 
-After this block, the config has:
-- `project.shortname` = user input (e.g., `MUL`)
-- `mulesoft.app_prefix` = same as shortname (`MUL`)
-- `orgs.sandbox` = `basename($PWD)` (e.g., `orders-process-api`)
+For MuleSoft, the user must still **manually configure** values per their Anypoint org (no sensible auto-default):
+- `mulesoft.anypoint_org_id`, `mulesoft.anypoint_environment`, `mulesoft.anypoint_region`, `mulesoft.api_layer`
+- `mulesoft.governance.required_policies` (when `api_manager_enabled: true`)
 
-Manual follow-up still required: edit `.adlc/config.yml` to set `anypoint_org_id`, `anypoint_environment`, `anypoint_region`, `api_layer`, and (if governance is on) `required_policies`. The skills will fail loudly when these fields hold placeholder values.
-
+Verify shortname:
 ```bash
-# Verify the shortname field is set and valid
+. "$HOME/.adlc/runtime/init-state.sh"
+
 shortname=$(awk '
   /^project:/                  { in_project=1; next }
   in_project && /^[^[:space:]#]/ { in_project=0 }
@@ -600,30 +816,135 @@ case "$shortname" in
 esac
 ```
 
-**Cross-repo (optional add-on)**. If the user says this repo will ever share features with other repos (admin app + its API + an iOS app, etc.), edit the `repos:` block in the same `.adlc/config.yml` to list siblings. The cross-repo conceptual model:
+**Cross-repo (optional add-on)**. If the user says this repo will share features with other repos, edit the `repos:` block in `.adlc/config.yml` to list siblings.
 
-- "Primary" is per-REQ, not a fixed role. The current repo is primary for REQs that originate here. Siblings are other repos that might participate when a cross-repo REQ starts here.
-- If you also originate REQs from one of those siblings, you'll run `/init` there too — each repo that hosts REQs gets its own `.adlc/`, its own `config.yml`, and its own `project.shortname`. Configs are symmetric mirrors of each other.
+### Step 10: Scaffold Playwright UI harness (when applicable)
 
-Advise the user:
-- "Edit `.adlc/config.yml`. The entry for THIS repo should have `primary: true` and no `path` (path is implicit since it's this repo). Each sibling entry gets a `path:` (relative to this repo root, or absolute). Every sibling must already be cloned locally at that path."
-- "If this is a single-repo project (REQs only ever originate here and never touch other repos), leave `repos:` with the single primary entry. ADLC skills fall back to single-repo behavior when no siblings are declared."
-- "After editing, verify with `cat .adlc/config.yml` and make sure each sibling path resolves: `git -C <sibling-path> rev-parse --git-dir`."
+Required when `.adlc/config.yml` declares a non-empty `playwright_specs:`. SFDC default seeds `tests/e2e`; MuleSoft default is empty (most Mule projects are headless), so this typically only runs on SFDC or on Mule Experience APIs that render HTML.
 
-### Step 10.5: Register the project with the sprint dashboard & open it in Chrome
-
-Tell the shared dashboard (running on this host, shared across every project) about this project so its REQs show up alongside everything else. Then launch / surface the dashboard URL in the user's default browser (Chrome preferred on macOS) so they can immediately see this project listed.
-
-The launcher script is idempotent: it upserts the current `ADLC_ROOT` into `~/.adlc/dashboard-registry.json`, no-ops if the dashboard is already running, and never fails the parent skill on error. Setting `ADLC_DASHBOARD_OPEN=1` tells it to open the dashboard URL in the browser after registration.
+**Skip this step entirely** when:
+- `.adlc/config.yml` does not declare `playwright_specs:` or sets it to empty, OR
+- For SFDC: `stack.frontends` does not include `lwc` AND no `force-app/**/lwc/**` directory exists AND `industries:` does not include `omnistudio` or `agentforce`.
 
 ```bash
+. "$HOME/.adlc/runtime/init-state.sh"
+
+# Toolkits ship the Playwright harness under templates/playwright/. Both
+# toolkits have an identical copy.
+TOOLKIT_PW="$TOOLKIT_HOME/templates/playwright"
+if [ ! -d "$TOOLKIT_PW" ]; then
+  echo "ERROR: Playwright harness template not found at $TOOLKIT_PW. Toolkit appears corrupted."
+  exit 1
+fi
+
+pw_specs=$(awk '/^playwright_specs:/ { sub(/^playwright_specs:[[:space:]]*/, ""); gsub(/["'\'']/, ""); sub(/[[:space:]]*#.*$/, ""); print; exit }' .adlc/config.yml 2>/dev/null)
+if [ -z "$pw_specs" ]; then
+  echo "Skipped Playwright harness scaffold — playwright_specs is not declared in .adlc/config.yml."
+else
+  # 1. playwright.config.ts at repo root
+  if [ ! -f playwright.config.ts ]; then
+    cp "$TOOLKIT_PW/playwright.config.ts" playwright.config.ts
+    echo "Created playwright.config.ts from canonical template."
+  else
+    echo "Preserved existing playwright.config.ts."
+  fi
+
+  # 2. tests/e2e/global-setup.ts
+  mkdir -p "$pw_specs"
+  if [ ! -f "$pw_specs/global-setup.ts" ]; then
+    cp "$TOOLKIT_PW/tests/e2e/global-setup.ts" "$pw_specs/global-setup.ts"
+    echo "Created $pw_specs/global-setup.ts from canonical template."
+  else
+    echo "Preserved existing $pw_specs/global-setup.ts."
+  fi
+
+  # 3. example.spec.ts.example
+  if [ ! -f "$pw_specs/example.spec.ts.example" ]; then
+    cp "$TOOLKIT_PW/tests/e2e/example.spec.ts.example" "$pw_specs/example.spec.ts.example"
+    echo "Created $pw_specs/example.spec.ts.example."
+  fi
+
+  # 4. tests/e2e/.gitignore
+  if [ ! -f "$pw_specs/.gitignore" ]; then
+    cp "$TOOLKIT_PW/tests/e2e/.gitignore" "$pw_specs/.gitignore"
+  fi
+
+  # 5. README.md inside the harness dir
+  if [ ! -f "$pw_specs/README.md" ]; then
+    cp "$TOOLKIT_PW/README.md" "$pw_specs/README.md"
+  fi
+
+  # 6. Wire Playwright into package.json
+  if [ "${ADLC_INIT_SKIP_PLAYWRIGHT_INSTALL:-0}" = "1" ]; then
+    echo "Skipped Playwright npm install (ADLC_INIT_SKIP_PLAYWRIGHT_INSTALL=1). Run manually:"
+    echo "  npm install --save-dev @playwright/test"
+    echo "  npx playwright install --with-deps chromium"
+    echo "  and add \"test:e2e\": \"playwright test\" to package.json scripts."
+  elif [ ! -f package.json ]; then
+    echo "Skipped Playwright npm install — no package.json at repo root."
+  else
+    pw_already_dep=$(node -e '
+      try {
+        const p = JSON.parse(require("fs").readFileSync("package.json","utf8"));
+        const has = (p.devDependencies && p.devDependencies["@playwright/test"]) ||
+                    (p.dependencies && p.dependencies["@playwright/test"]);
+        process.stdout.write(has ? "1" : "0");
+      } catch (_) { process.stdout.write("0"); }
+    ')
+    if [ "$pw_already_dep" = "1" ]; then
+      echo "@playwright/test already declared in package.json — skipping npm install."
+    else
+      echo "Installing @playwright/test (npm install --save-dev @playwright/test)..."
+      if npm install --save-dev @playwright/test; then
+        echo "  Done."
+      else
+        echo "WARNING: 'npm install --save-dev @playwright/test' failed. Re-run manually."
+      fi
+    fi
+
+    if [ "${ADLC_INIT_SKIP_PLAYWRIGHT_BROWSERS:-0}" = "1" ]; then
+      echo "Skipped 'npx playwright install --with-deps chromium'."
+    else
+      echo "Installing Chromium for Playwright..."
+      if npx --yes playwright install --with-deps chromium; then
+        echo "  Done."
+      else
+        echo "WARNING: 'npx playwright install --with-deps chromium' failed. Re-run manually before the first /architect on a UI REQ."
+      fi
+    fi
+
+    test_e2e_added=$(node -e '
+      const fs = require("fs");
+      const p = JSON.parse(fs.readFileSync("package.json","utf8"));
+      p.scripts = p.scripts || {};
+      if (p.scripts["test:e2e"]) { process.stdout.write("kept"); return; }
+      p.scripts["test:e2e"] = "playwright test";
+      fs.writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");
+      process.stdout.write("added");
+    ')
+    if [ "$test_e2e_added" = "added" ]; then
+      echo "Added \"test:e2e\": \"playwright test\" to package.json scripts."
+    else
+      echo "Preserved existing \"test:e2e\" script in package.json."
+    fi
+  fi
+fi
+```
+
+### Step 10.5: Register the project with the sprint dashboard
+
+Tell the shared dashboard about this project so its REQs show up alongside everything else. The launcher script is idempotent, no-ops if the dashboard is already running, and never fails the parent skill on error.
+
+```bash
+. "$HOME/.adlc/runtime/init-state.sh"
+
 # Resolve the launcher. Prefer the locally-copied .adlc/ path so this works
-# inside git worktrees; fall back to the canonical toolkit location.
+# inside git worktrees; fall back to the toolkit location.
 LAUNCHER=""
 if [ -x .adlc/tools/sprint-dashboard/launch.sh ]; then
   LAUNCHER=".adlc/tools/sprint-dashboard/launch.sh"
-elif [ -x "$HOME/.claude/skills/tools/sprint-dashboard/launch.sh" ]; then
-  LAUNCHER="$HOME/.claude/skills/tools/sprint-dashboard/launch.sh"
+elif [ -x "$TOOLKIT_HOME/tools/sprint-dashboard/launch.sh" ]; then
+  LAUNCHER="$TOOLKIT_HOME/tools/sprint-dashboard/launch.sh"
 fi
 
 if [ -n "$LAUNCHER" ]; then
@@ -633,14 +954,16 @@ else
 fi
 ```
 
-After this step, the user should see `<project-name>` listed at `http://127.0.0.1:5174` (default port; override with `ADLC_DASHBOARD_PORT`). The server picks up the new entry from the registry on its next ~1.5s poll, so even when the launcher reports "already running", the project shows up within seconds.
+After this step, the user should see `<project-name>` listed at `http://127.0.0.1:5174` (default port; override with `ADLC_DASHBOARD_PORT`).
 
 ### Step 11: Summary
+
 1. Display the created directory structure. If Step 1.5 ran `git init`, call that out and remind the user to wire in a remote (`git remote add origin <url>`).
-2. Confirm the official MuleSoft skill pack is installed under `.claude/skills/`. If Step 7.6 reported a WARNING, surface that line in the summary so the user can re-run `npx skills add mulesoft/mulesoft-dx/skills/mule-development` manually.
-3. Confirm `.mcp.json` (via `.claude/settings.json`) wires both DX MCP and Platform MCP. Remind the user to populate `.env` from `.env.example` with the four connected-app credentials before running Claude Code.
-4. Confirm the rules and catalog files are in place: `.adlc/context/mulesoft-rules.md`, `.adlc/context/mule-skills-catalog.md`, `.adlc/partials/mule-quality-checklist.md`.
-5. Explain the ADLC workflow: `/spec` → `/validate` → `/architect` → `/validate` → implement → `/reflect` → `/review` → `/wrapup` (or use `/proceed` to run the full pipeline automatically).
-6. If cross-repo config was scaffolded, remind the user that `/proceed` will create worktrees in every touched sibling and open one PR per repo.
-7. Remind the user to manually populate the remaining `.adlc/config.yml` MuleSoft fields: `anypoint_org_id`, `anypoint_environment`, `anypoint_region`, `api_layer`, and (when `governance.api_manager_enabled: true`) `governance.required_policies` + `governance.governance_ruleset`.
-8. Suggest adding ADLC skill references to the project's `CLAUDE.md` if one exists.
+2. Confirm `STACK` and `TOOLKIT_HOME` (echo from `~/.adlc/runtime/init-state.sh`) so the user knows which toolkit was used.
+3. Confirm project-local skill symlinks were created — explain that `/architect`, `/proceed`, `/spec`, etc., now resolve to the matching toolkit regardless of `~/.claude/skills`.
+4. **For SFDC projects:** confirm rules and catalog files are in place: `.adlc/context/sf-skills-catalog.md`, `.adlc/context/salesforce-rules.md`.
+5. **For MuleSoft projects:** confirm `.adlc/context/mule-skills-catalog.md`, `.adlc/context/mulesoft-rules.md`, `.adlc/partials/mule-quality-checklist.md`. Confirm the official MuleSoft skill pack is installed under `.claude/skills/mule-development`. Remind the user to populate `.env` from `.env.example` with the four connected-app credentials. Remind them to manually populate the remaining `.adlc/config.yml` MuleSoft fields: `anypoint_org_id`, `anypoint_environment`, `anypoint_region`, `api_layer`, and (when `governance.api_manager_enabled: true`) `governance.required_policies` + `governance.governance_ruleset`.
+6. Explain the ADLC workflow: `/spec` → `/validate` → `/architect` → `/validate` → implement → `/reflect` → `/review` → `/wrapup` (or use `/proceed` to run the full pipeline automatically).
+7. If cross-repo config was scaffolded, remind the user that `/proceed` will create worktrees in every touched sibling and open one PR per repo.
+8. If the Playwright harness was scaffolded, confirm `npm run test:e2e` is wired (Step 10 installs `@playwright/test`, downloads chromium, and adds the script). If either install reported a WARNING, surface that line.
+9. Suggest adding ADLC skill references to the project's `CLAUDE.md` if one exists.

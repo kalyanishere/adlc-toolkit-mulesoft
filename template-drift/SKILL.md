@@ -25,7 +25,7 @@ Scope: $ARGUMENTS (optional — single template name to check; otherwise all tem
 ## Prerequisites
 
 1. `.adlc/templates/` must exist in the current project. If it does not, stop and tell the user: "This project has no local templates — it uses toolkit templates directly. No drift to check." (New projects per the `/init` Step 6 policy don't copy templates locally.)
-2. `~/.claude/skills-mulesoft/templates/` must resolve through the symlink. If it does not, stop and tell the user: "The adlc-toolkit symlink is broken. Verify `readlink ~/.claude/skills` points to the toolkit repo."
+2. `~/.claude/skills-mulesoft/templates/` must resolve through the symlink. If it does not, stop and tell the user: "The adlc-toolkit symlink is broken. Verify `readlink ~/.claude/skills-mulesoft` points to the toolkit repo."
 
 ## Instructions
 
@@ -119,7 +119,7 @@ Emit a summary table, then per-file detail. The report covers BOTH surfaces (tem
 ## Template Drift Report — [date]
 
 Project: <repo name>
-Toolkit ref: <`git -C "$(readlink ~/.claude/skills)" rev-parse --short HEAD`>
+Toolkit ref: <`git -C "$(readlink ~/.claude/skills-mulesoft)" rev-parse --short HEAD`>
 
 | Template | Status | Drift | Classification |
 |---|---|---|---|
