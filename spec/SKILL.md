@@ -116,27 +116,29 @@ Run a weighted-score retrieval over three corpora using the query from Step 1.5.
 
 9. **Cold-start path**: if every corpus is empty, or all candidates filter out to zero, skip retrieval and record this explicitly when Step 3 writes the `## Retrieved Context` section. Proceed to authoring without retrieved bodies.
 
-### Step 1.7: Exclude Org-Config Layers (never pipeline these)
+### Step 1.7: Exclude Anypoint Platform Operational Artifacts (never pipeline these)
 
-Some Salesforce artifacts are **org-config**, not code, and pipelining them is more expensive than running them by hand in Setup — secrets leak into metadata, OAuth callbacks need approval flows, certificates rotate on a different cadence, and a failed deploy on any of them blocks the whole feature for an hour while a human untangles it.
+Some Anypoint Platform artifacts are **operational config**, not code, and pipelining them is more expensive than provisioning them through the platform UI / ops runbook — secrets leak into committed properties files, OAuth client credentials need ops approval, encryption keys rotate on a different cadence, and a failed deploy on any of them blocks the whole feature for an hour while a human untangles it.
 
 **These artifacts are NEVER child REQs and NEVER appear in `Files to Create/Modify`:**
 
-- Connected Apps / External Client Apps
-- Named Credentials + their External Credentials
-- Auth Providers
-- Certificates & Key Management entries
-- Remote Site Settings (legacy)
-- License & feature-license assignments
+- DX MCP / Platform MCP connected apps (client-credentials + Authorization Code) and their client_id/client_secret
+- secure-properties encryption keys (the AES key itself; encrypted property *values* DO live in committed properties files)
+- Anypoint Secrets Manager entries (the entries themselves; the placeholders that reference them DO live in code)
+- API Manager API instance registrations created by hand in the UI (use Platform MCP `create_api_instance` from the deploy gate, not from a code REQ)
+- Governance ruleset definitions hosted on Exchange (consume rulesets in code; create them via Anypoint Governance UI / ops repo)
+- Exchange organization-level entitlements / private-Exchange membership grants
+- CloudHub 2.0 region or VPC configuration; Runtime Fabric cluster provisioning
+- Anypoint user / group / role assignments
 
-**What to do instead** when the feature request implies any of the above (e.g., "call the Stripe API", "OAuth into ServiceNow", "sign outbound JWTs"):
+**What to do instead** when the feature request implies any of the above (e.g., "call the Stripe API", "rotate the Salesforce client secret", "stand up a new Sandbox VPC"):
 
-1. Do NOT spawn a child REQ for the org-config artifact.
-2. Add the artifact to the spec's `## Assumptions` section in the form: `<ArtifactType> '<Name>' is pre-created in the target org's Setup before deploy starts.` Be specific — name the Connected App, the Named Credential, the certificate alias, etc., so `/canary` can verify presence.
+1. Do NOT spawn a child REQ for the operational artifact.
+2. Add the artifact to the spec's `## Assumptions` section in the form: `<ArtifactType> '<Name>' is pre-provisioned in the target Anypoint org before deploy starts.` Be specific — name the connected app, the secrets-manager entry, the encryption-key alias, etc., so `/canary` can verify presence.
 3. Add the artifact to `## External Dependencies` so the gate in `/canary` Step 2a can read it.
-4. If the user's request is *exclusively* about org-config (e.g., "create a Named Credential for X"), tell the user: *"Connected Apps, Named Credentials, Auth Providers, and Certificates are intentionally excluded from the ADLC pipeline. Create this in Setup directly — it's a 2-minute click-through and avoids exposing secrets in metadata."* Do NOT allocate a REQ.
+4. If the user's request is *exclusively* about operational artifacts (e.g., "create a connected app for the new Anypoint org"), tell the user: *"Anypoint connected apps, secrets-manager entries, encryption keys, and VPC / region configuration are intentionally excluded from the ADLC pipeline. Provision them via Anypoint Platform UI or your ops repo — it's a 2-minute click-through and avoids exposing secrets in committed code."* Do NOT allocate a REQ.
 
-This rule overrides the general decomposition heuristic — even if the user explicitly asks for the org-config artifact in a deployable form, refuse and route to Setup.
+This rule overrides the general decomposition heuristic — even if the user explicitly asks for the operational artifact in a deployable form, refuse and route to ops.
 
 ### Step 1.8: Decompose Multi-Layer Requests
 
@@ -180,7 +182,7 @@ When the user explicitly insists a config layer be pipelined (e.g., "I want the 
 
 #### Step 1.8.3 — Propose the decomposition
 
-Build a child-REQ plan from the surviving (non-Setup-routed) layers. For each layer:
+Build a child-REQ plan from the surviving (non-Anypoint-Platform-routed) layers. For each layer:
 
 - **Title**: `<Layer purpose> <object/feature>` — e.g., `Orders System API spec`, `Orders Process API flow`, `Orders MUnit suite`.
 - **Layer tag**: the layer key from Step 1.8.1 — recorded in the spec's `tags:` frontmatter.
@@ -200,9 +202,10 @@ Proposed decomposition for "<feature request>":
   <id-2>  <Title 2>            [<complexity>, <layer>, depends: <id-1>]
   <id-3>  <Title 3>            [<complexity>, <layer>, depends: <id-2>]
 
-Routed to Setup (NOT pipelined — do these by hand):
-  - Permission set 'X' field grant
-  - FlexiPage placement of the LWC on <RecordPage>
+Routed to Anypoint Platform (NOT pipelined — provision out-of-band):
+  - DX MCP connected app 'X' with Code Builder + Runtime Manager scopes
+  - Secure-property 'salesforce.client_secret' rotation in Anypoint Secrets Manager
+  - API Manager `client-id-enforcement` policy applied via Platform MCP `apply_policy_to_instance` post-deploy
 
 Confirm to allocate, edit titles/order, or reply 'collapse' to bundle into one REQ.
 ```
@@ -271,16 +274,16 @@ In **interactive mode**, surface the proposed tier and let the user override. In
 
 **Loop note (decomposition)**: when Step 1.8 proposed a multi-REQ decomposition that the user confirmed, run all of Step 3 **once per child REQ** — each child gets its own directory, frontmatter, and body. Children share the retrieval context from Step 1.6 but carry their own layer-specific tags, dependencies, and complexity tier. When Step 1.8 collapsed (or did not trigger), Step 3 runs exactly once.
 
-1. Create directory: `.adlc/specs/<REQ_ID>-feature-slug/` where `<REQ_ID>` is the value returned by `allocate_req` in Step 2 (e.g., `.adlc/specs/SFC-REQ-007-add-payment-flow/`). The directory name MUST start with the full namespaced id, including the shortname prefix.
+1. Create directory: `.adlc/specs/<REQ_ID>-feature-slug/` where `<REQ_ID>` is the value returned by `allocate_req` in Step 2 (e.g., `.adlc/specs/MUL-REQ-007-add-orders-process-api/`). The directory name MUST start with the full namespaced id, including the shortname prefix.
 2. Create `requirement.md` using the template from `.adlc/templates/requirement-template.md`
 3. Fill in all sections:
-   - **Frontmatter**: id, title, status (`draft`), `deployable` (carry the template default unless the feature is explicitly non-deployable — e.g., iOS-only or docs-only), `complexity` (from Step 2.5), `dependencies` (sibling/parent REQ ids when this REQ was allocated as a child in Step 1.8.4 — empty list otherwise), created date, updated date, AND the five query tags from Step 1.5 — `component`, `domain`, `stack`, `concerns`, `tags` (the layer key from Step 1.8.1 is appended to `tags` for decomposed children, e.g., `apex-service`, `lwc-component`). This self-tagging makes the new REQ retrievable for future `/spec` invocations (per REQ-258 BR-7).
+   - **Frontmatter**: id, title, status (`draft`), `deployable` (carry the template default unless the feature is explicitly non-deployable — e.g., docs-only), `complexity` (from Step 2.5), `dependencies` (sibling/parent REQ ids when this REQ was allocated as a child in Step 1.8.4 — empty list otherwise), created date, updated date, AND the five query tags from Step 1.5 — `component`, `domain`, `stack`, `concerns`, `tags` (the layer key from Step 1.8.1 is appended to `tags` for decomposed children, e.g., `mule-flow`, `api-spec-system`, `dataweave-module`, `munit-suite`). This self-tagging makes the new REQ retrievable for future `/spec` invocations.
    - **Description**: What the feature does and why — be specific and grounded in the project context
    - **System Model**: Structured data model — Entities (fields, types, constraints), Events (triggers, payloads), Permissions (actions, roles). Remove sub-sections that don't apply to this feature.
-   - **Business Rules**: Explicit, testable constraints governing behavior (e.g., "Only item owner can delete"). Numbered BR-1, BR-2, etc.
+   - **Business Rules**: Explicit, testable constraints governing behavior (e.g., "Only authenticated callers with role=order-admin may POST /orders"). Numbered BR-1, BR-2, etc.
    - **Acceptance Criteria**: Concrete, testable criteria as checkboxes
-   - **External Dependencies**: Any new APIs, services, or libraries needed. If the feature talks to an external system, list the Named Credential / External Credential / Auth Provider / Certificate / Connected App that brokers it — these are excluded from the pipeline per Step 1.7 and must already exist in the target org.
-   - **Assumptions**: Things assumed to be true that could affect the design. If Step 1.7 routed any org-config artifact here, the assumption MUST follow the form: `<ArtifactType> '<Name>' is pre-created in the target org's Setup before deploy starts.`
+   - **External Dependencies**: Any new APIs, services, or libraries needed. If the feature talks to an external system, list the connected-app / secure-property entry / API Manager policy template / Exchange asset that brokers it — these are excluded from the pipeline per Step 1.7 and must already be provisioned in the target Anypoint org.
+   - **Assumptions**: Things assumed to be true that could affect the design. If Step 1.7 routed any operational artifact here, the assumption MUST follow the form: `<ArtifactType> '<Name>' is pre-provisioned in the target Anypoint org before deploy starts.`
    - **Open Questions**: Questions that need answers before implementation
    - **Out of Scope**: Items explicitly excluded to prevent scope creep
    - **Retrieved Context** (NEW, always present): append a `## Retrieved Context` section at the end of the spec listing every retrieved source from the retrieval summary produced in Step 1.6 in the form `ID (corpus, score): title`. If no context was retrieved (cold-start path — either the corpus is empty or no documents scored above zero), write exactly: `No prior context retrieved — no tagged documents matched this area.`
@@ -291,7 +294,7 @@ In **interactive mode**, surface the proposed tier and let the user override. In
 2. Highlight any assumptions or open questions that need input.
 3. Remind the user of next moves:
    - Single REQ: run `/validate` then `/architect`.
-   - Decomposed (multiple children): run `/validate <id>` per child, then `/sprint <id-1> <id-2> ...` to run them in parallel respecting `dependencies:`, or `/proceed <id-1>` to run one at a time. Setup-routed declarative items (perm-set / FlexiPage from Step 1.8.2) need the user to wire them in App Builder once their producer REQ deploys — call those out explicitly here so they aren't forgotten.
+   - Decomposed (multiple children): run `/validate <id>` per child, then `/sprint <id-1> <id-2> ...` to run them in parallel respecting `dependencies:`, or `/proceed <id-1>` to run one at a time. Anypoint-Platform-routed operational items (connected-app provisioning, API Manager policy applications, secure-property rotations from Step 1.8.2 / 1.7) need the user to action them in Anypoint Platform (UI or Platform MCP) once their producer REQ deploys — call those out explicitly here so they aren't forgotten.
 
 ## Quality Checklist
 - [ ] Acceptance criteria are specific and testable (not vague)
@@ -300,7 +303,7 @@ In **interactive mode**, surface the proposed tier and let the user override. In
 - [ ] Out of scope items prevent scope creep
 - [ ] No implementation details leaked into the requirement (that's for architecture phase)
 - [ ] Retrieved Context section present
-- [ ] No Connected App, Named/External Credential, Auth Provider, Certificate, Remote Site Setting, or License assignment appears as a deliverable — each is captured as a pre-deploy assumption per Step 1.7
+- [ ] No DX/Platform MCP connected app, secure-properties encryption key, Anypoint Secrets Manager entry, Exchange entitlement, or CloudHub region/VPC config appears as a deliverable — each is captured as a pre-deploy assumption per Step 1.7
 - [ ] If the request spans ≥2 layers from Step 1.8.1, a decomposition was proposed and either confirmed (children allocated with `dependencies:`) or explicitly collapsed by the user
-- [ ] Declarative-only layers (permset, FlexiPage, custom-metadata) are routed to Setup unless the user opted to pipeline them — and when pipelined, they sit at `complexity: trivial`
+- [ ] Configuration-only layers (`api-manager-policy`, `secure-properties`, `deploy-config`) are routed to Anypoint Platform UI / ops repos unless the user opted to pipeline them — and when pipelined, they sit at `complexity: trivial`
 - [ ] Each decomposed child has its layer key recorded in `tags:` and a `## Decomposition Context` section linking parent and siblings

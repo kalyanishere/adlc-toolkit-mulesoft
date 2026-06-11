@@ -27,7 +27,13 @@ What this task accomplishes.
 
 ## Files to Create/Modify
 
-- `path/to/file.js` — description of changes
+- `src/main/mule/<flow>.xml` — description of changes (e.g., add new sub-flow, wire error-handler)
+- `src/test/munit/<flow>-test-suite.xml` — MUnit suite covering the new/changed flow
+- `dw/Modules/<Module>.dwl` — shared DataWeave transformations (when applicable)
+- `src/main/resources/api/<asset>.raml|.yaml` — API spec changes (contract-first)
+- `src/main/resources/properties/{dev,sandbox,staging,prod}.properties` — env-specific config
+- `pom.xml` — dependency / deploy-profile changes (vCore, replicas, region)
+- `mule-artifact.json` — runtime / shared-libs declarations
 
 ## Acceptance Criteria
 

@@ -54,6 +54,7 @@ Wired by `/init` into `.mcp.json`. Tools available (per docs):
 | Rubric | Purpose | Scoring weight |
 |---|---|---|
 | `mule-flow-quality` | Quality bar for Mule XML flows: naming, composition, choice/routing, doc:description completeness | quality |
+| `mule-observability` | Correlation-id propagation, structured logging, log-level discipline, Anypoint Monitoring instrumentation, trace-context handling | quality + correctness |
 | `mule-error-handling` | Error-handler completeness, on-error-continue vs propagate, type matching, dead-letter pattern | correctness |
 | `dataweave-quality` | DW 2.x syntax, output directive, functional composition, type annotations, no payload mutation | quality + correctness |
 | `munit-coverage` | Coverage bar, mock completeness, assertion quality, no Thread.sleep, suite structure | test-coverage |
@@ -107,6 +108,7 @@ Wired by `/init` into `.mcp.json`. Tools available (per docs):
 | Source | Use when |
 |---|---|
 | Toolkit `mule-flow-quality` rubric | Quality scoring for `.xml` flows. |
+| Toolkit `mule-observability` rubric | Correlation-id propagation, structured logging, log-level discipline, Anypoint Monitoring instrumentation. |
 | Toolkit `dataweave-quality` rubric | Quality + correctness for `.dwl`. |
 | Toolkit `mule-error-handling` rubric | Correctness for error-handler completeness. |
 | Toolkit `mule-connector-config-hygiene` rubric | Architecture scoring for connector configs. |
@@ -141,7 +143,7 @@ The `task-implementer` (Phase 4) and the Phase 5 review panel load the matching 
 
 | File-glob | Build orchestrator (Phase 4) | Review-time rubrics (Phase 5) |
 |---|---|---|
-| `src/main/mule/**/*.xml` (non-test) | `build-mule-integration` (official) | `mule-flow-quality` (quality), `mule-error-handling` (correctness), `mule-connector-config-hygiene` (architecture) |
+| `src/main/mule/**/*.xml` (non-test) | `build-mule-integration` (official) | `mule-flow-quality` (quality), `mule-observability` (quality + correctness), `mule-error-handling` (correctness), `mule-connector-config-hygiene` (architecture) |
 | `**/*.dwl`, embedded `<dw:transform>` blocks | `build-mule-integration` (official) | `dataweave-quality` (quality + correctness) |
 | `src/main/resources/api/**/*.{raml,json,yaml}` | DX MCP `generate_api_spec` / `implement_api_spec` | `apikit-contract-conformance` (architecture), `api-led-architecture` (architecture) |
 | `src/test/munit/**/*.xml` | DX MCP `generate_munit_test` / `modify_munit_test` | `munit-coverage` (test-coverage) |

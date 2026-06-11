@@ -2,7 +2,7 @@
 
 Skills, agents, templates, and quality gates for spec-driven development on **MuleSoft / Anypoint Platform** projects with [Claude Code](https://claude.com/claude-code). Wraps the ADLC orchestration around the official [`@salesforce/mulesoft-vibes-skills`](https://docs.mulesoft.com/anypoint-code-builder/vibes-skills) skill pack and the two MuleSoft MCP servers (DX MCP and Platform MCP) so reviewers and the implementer consume Mule-specific rubrics by file glob.
 
-> **Status (2026-06-11)**: cloned from `adlc-toolkit-sfdc` and rebuilt for MuleSoft. Phases 0a-g (context + agents + skill rewrites), 2 (10 review rubrics + `mule-router`), 4 (Mule presets + templates), and 7 (`mule-lint` / `mule-preflight` / `mule-coverage` tools) are landed. The 13 orchestration skills have substantive Mule-flavored `SKILL.md` content; rubrics carry real DataWeave 2.x / MUnit / APIkit / API Manager scoring. **Known gaps** (audit report, this date): `templates/requirement-template.md` tier examples are still SFDC-flavored; `spec/SKILL.md` retains four FlexiPage / perm-set carve-outs; `agents/pipeline-runner.md` describes the worktree as Apex/LWC at lines 55 and 292; `templates/task-template.md` example uses `path/to/file.js`; no rubric scores observability (correlation-id propagation, Anypoint Monitoring) despite `mulesoft-rules.md` calling it non-negotiable. Pre-consumer-launch sweep tracked in follow-ups.
+> **Status (2026-06-11)**: cloned from `adlc-toolkit-sfdc` and rebuilt for MuleSoft. Phases 0a-g (context + agents + skill rewrites), 2 (11 review rubrics + `mule-router`), 4 (Mule presets + templates), and 7 (`mule-lint` / `mule-preflight` / `mule-coverage` tools) are landed. The 13 orchestration skills have substantive Mule-flavored `SKILL.md` content; rubrics carry real DataWeave 2.x / MUnit / APIkit / API Manager scoring. **Pre-consumer-launch sweep complete** (this date): `templates/requirement-template.md` tier examples rewritten for Mule; `spec/SKILL.md` Step 1.7 / 1.8.3 / Step 3 carve-outs replaced (Anypoint operational artifacts, not SFDC Setup); `agents/pipeline-runner.md` worktree description corrected; `templates/task-template.md` example uses real Mule artifact paths; `mule-observability` rubric authored to score correlation-id propagation + structured logging + Anypoint Monitoring instrumentation. **Remaining before consumer-ready**: end-to-end dry run on a real Mule project (no smoke-test recorded) and the planned `*-mule` rename + `adlc-router` shim (see below).
 >
 > **Naming collision plan**: this fork and `adlc-toolkit-sfdc` ship the same skill names (`/init`, `/proceed`, …), so a developer with both installed would see one silently shadow the other. Resolution (planned, separate pass): rename this fork's skills to `*-mule` (sfdc fork → `*-sfdc`) and stand up a small `adlc-router` repo whose skills own the unsuffixed names and prompt for stack when both forks are present. Single-fork users see no behavior change.
 
@@ -37,11 +37,12 @@ See `.adlc/context/mule-skills-catalog.md` for the full file-glob → skill+rubr
 
 ### Toolkit-authored Mule rubrics (`skills/mule/`)
 
-All ten rubrics carry scoring tables, file-glob dispatch from `mule-router`, and real Mule XML / DataWeave 2.x / MUnit examples — not skeleton placeholders.
+All eleven rubrics carry scoring tables, file-glob dispatch from `mule-router`, and real Mule XML / DataWeave 2.x / MUnit examples — not skeleton placeholders.
 
 | Rubric | Purpose |
 |---|---|
 | `mule-flow-quality` | 150-pt scoring on flow naming, newspaper rule, sub-flow reuse, choice/error structure |
+| `mule-observability` | 100-pt scoring on correlation-id propagation, structured logging, log-level discipline, Anypoint Monitoring instrumentation |
 | `mule-error-handling` | Error-handler completeness, `<until-successful>` / `<batch:job>` / `<scatter-gather>` semantics |
 | `dataweave-quality` | 100-pt scoring on DW 2.0 syntax, output directives, null-safety, module reuse |
 | `munit-coverage` | 120-pt scoring on coverage floors, mock completeness per connector, assertion quality |

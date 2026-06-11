@@ -52,7 +52,7 @@ If you find yourself wanting to put a descriptive string into `currentPhase` "fo
 
 ## Worktree Isolation — and the State File Exception
 
-You operate inside an isolated worktree for **code work** (Apex, LWC, perm sets, force-app/**) for the entire run after Step 1.5. Step 0 (preflight + state init) and Phase 1 (Validate Spec) run in the primary repo's MAIN CHECKOUT — no worktree exists yet, by design, so a failed validation does not leave a stray worktree behind. Step 1.5 (after Phase 1 passes) parses the launch prompt's `WORKTREE PATH (mandatory): ...` line and runs `git worktree add`. From Step 1.5 onward, `pipeline-state.json.repos[<id>].worktree` is the immutable source of truth for the worktree path.
+You operate inside an isolated worktree for **code work** (Mule XML flows, MUnit suites, DataWeave modules, API specs, `pom.xml`, `mule-artifact.json`, properties files) for the entire run after Step 1.5. Step 0 (preflight + state init) and Phase 1 (Validate Spec) run in the primary repo's MAIN CHECKOUT — no worktree exists yet, by design, so a failed validation does not leave a stray worktree behind. Step 1.5 (after Phase 1 passes) parses the launch prompt's `WORKTREE PATH (mandatory): ...` line and runs `git worktree add`. From Step 1.5 onward, `pipeline-state.json.repos[<id>].worktree` is the immutable source of truth for the worktree path.
 
 **`pipeline-state.json` is the explicit exception to worktree isolation.** It lives in the **primary repo's main checkout** for the entire run — Phase 0 through Phase 8 — never inside a worktree. This is deliberate:
 
@@ -73,7 +73,7 @@ Where `<repos[primary-id].path>` is the **main-checkout absolute path** (NOT `re
 1. **State is the sole source of truth for paths.** Step 1.5 reads the launch prompt **once** to populate state. Every phase from Phase 2 onward MUST read the worktree path exclusively from `pipeline-state.json.repos[<id>].worktree`. You MUST NOT infer the worktree from cwd, from the REQ id, from re-reading the launch prompt, or from any naming convention.
 2. **Re-confirm the active worktree at the start of every phase from Phase 2 onward.** Read `pipeline-state.json` (from `$STATE_FILE` — i.e., the main checkout) first thing; do not assume cwd, paths, or context from a prior phase carry over. Shell cwd does not persist between Bash calls — a `cd` issued in one Bash call has no effect on the next — so the safe pattern is to use absolute paths or `git -C <worktree>` form (see rule 3) rather than rely on `cd`.
 3. **Every Bash call MUST use absolute paths or `git -C <worktree>` form.** You MUST NOT rely on inherited cwd. Relative paths are a protocol violation.
-4. **Code commits go to the worktree; state writes go to main.** The worktree is a working tree on the feature branch (`feat/REQ-xxx-...`). All code-bearing files (`force-app/**`, test files, etc.) are edited inside the worktree and committed by `git -C <worktree> commit ...`. The state file is NOT a code file — it's an out-of-band orchestration ledger. It lives in the main checkout's untracked working tree (the `.adlc/specs/REQ-xxx-*/` directory was created in Phase 0 and is still there). Editing `$STATE_FILE` does not interact with the feature branch's commit history.
+4. **Code commits go to the worktree; state writes go to main.** The worktree is a working tree on the feature branch (`feat/REQ-xxx-...`). All code-bearing files (`src/main/mule/**`, `src/test/munit/**`, `dw/**`, `src/main/resources/api/**`, `pom.xml`, `mule-artifact.json`, etc.) are edited inside the worktree and committed by `git -C <worktree> commit ...`. The state file is NOT a code file — it's an out-of-band orchestration ledger. It lives in the main checkout's untracked working tree (the `.adlc/specs/REQ-xxx-*/` directory was created in Phase 0 and is still there). Editing `$STATE_FILE` does not interact with the feature branch's commit history.
 5. **The Phase 8 `gh pr merge` exception still applies.** Single-repo merges run from `repos[<id>].path` because git refuses to delete a branch checked out by a worktree. See "Worktree gotchas" under Phase 8.
 
 ## Pipeline Phases
@@ -289,7 +289,7 @@ This write is the load-bearing finality. After it lands, the dashboard correctly
 ```
 (In cross-repo mode also pass `--touched-repos <id>,<id>,...`.)
 
-**Step 3 — Verify `/wrapup` succeeded.** If it surfaced a Salesforce permset blocker or deploy failure, STOP and emit terminal claim `blocked`. State finalization (Step 1) already landed, so the dashboard shows the REQ as `merged` — but a blocker on `/wrapup` is a *deploy blocker*, not a *merge blocker*, and the user needs to resolve it. The next `/wrapup REQ-xxx` invocation is a clean retry; do NOT re-merge.
+**Step 3 — Verify `/wrapup` succeeded.** If it surfaced a `Policies.md` gate failure, an API Manager policy promotion error (Platform MCP `apply_policy_to_instance`), a `mvn deploy` failure, or a governance scan failure, STOP and emit terminal claim `blocked`. State finalization (Step 1) already landed, so the dashboard shows the REQ as `merged` — but a blocker on `/wrapup` is a *deploy blocker*, not a *merge blocker*, and the user needs to resolve it. The next `/wrapup REQ-xxx` invocation is a clean retry; do NOT re-merge.
 
 **Step 4 — Remove the worktree in each touched repo**, using the absolute path from state:
 ```sh
