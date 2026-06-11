@@ -93,55 +93,69 @@ Execute these phases in order, maintaining `pipeline-state.json` throughout:
 
 ## Phase 5 Inline Review Checklists
 
-Since you cannot dispatch review agents, run these checklists yourself in subagent mode. The full checklists live in the corresponding agent definitions under `agents/`; this is the condensed Salesforce-aware inline version.
+Since you cannot dispatch review agents, run these checklists yourself in subagent mode. The full checklists live in the corresponding agent definitions under `agents/`; this is the condensed MuleSoft-aware inline version.
 
-**Before running the checklists**: identify the touched-file set, look up each file's sf-skill rubric in `.adlc/context/sf-skills-catalog.md`, and read the matching rubric(s) from `skills/sf/<skill>/SKILL.md`. The rubric scoring grid is the bar you measure against. Also read `salesforce-rules.md` (always-on baseline).
+**Before running the checklists**: identify the touched-file set, look up each file's Mule rubric in `.adlc/context/mule-skills-catalog.md`, and read the matching rubric(s) from `skills/mule/<rubric>/SKILL.md`. The rubric scoring grid is the bar you measure against. Also read `mulesoft-rules.md` (always-on baseline).
+
+When a finding is about runtime / governance state, name the Platform MCP / DX MCP tool the consumer should invoke (`view_api_instance_policies`, `check_policy_conformance`, `list_applications`, `view_api_version_details`, etc.). DO NOT call the MCP tools yourself in subagent mode; surface them as follow-ups for the user to verify.
 
 ### Reflection Checklist (mirrors agents/reflector.md)
 - Does the code meet the requirement / task acceptance criteria?
-- Walk salesforce-rules.md baseline: sharing keyword, AccessLevel, no @future, no SOQL/DML in loops, no hardcoded IDs/URLs, no SeeAllData=true, no System.debug in prod, perm-set naming, Named Credentials, ApexDoc, API version
-- Walk each loaded sf-skill rubric end-to-end; estimate score
+- Walk mulesoft-rules.md baseline: anypoint-cli-v4 only, kebab-case flow names, every flow has error-handler, every operation has config-ref, http-request-config has timeouts, DW 2.0 only with explicit output, no hardcoded credentials/URLs/IDs, secure-properties-config for secrets, structured logger + correlation-id, no Thread.sleep, streaming for >5MB, API Manager policies declared (when governance enabled), api.layer in pom.xml, doc:description ≤3 lines
+- Walk each loaded Mule rubric end-to-end; estimate score
 - Check `.adlc/knowledge/lessons/` for applicable pitfalls (Grep by component/domain/tags)
 - No TODOs, commented-out code, debug log lines left behind
 
 ### Correctness Review (mirrors agents/correctness-reviewer.md)
-- Apex: governor-limit blast radius, mixed DML, trigger recursion, async finalizer correctness
-- SOQL injection (bind variables only); WITH USER_MODE matches sharing context
-- Logic errors (off-by-one, null guards, type coercion)
-- Error handling around DML / callouts / async jobs
-- LWC: uncaught promises, missing decorators
-- Flow: bulk safety; recursion in record-triggered flows
-- Agentforce: ground-truth fabrication, business rules in free-form prompt
+- Mule flow: missing error-handler, empty on-error-*, recursive flow-ref, streaming exhaustion, batch-job error semantics, async leak, scatter-gather error masking, until-successful with no upper bound, choice without otherwise
+- DataWeave: null-safety, missing output directive, DW 1.0 syntax, type-coercion bugs, payload mutation, lazy-eval traps
+- Async / streaming: stream consumed twice without rewind, async race, batch shared mutable state, scheduler overlap
+- Error handling: missing error-mapping for upstream-specific errors, catch-all-only handler, errors from upstream callouts not surfaced
+- Security (correctness lens): hardcoded credentials, path-traversal vector via property placeholder, HTTP listener exposed without auth in production, PII payloads logged unredacted
+- MUnit: external connector NOT mocked, mock returns wrong shape, assertions on payload only without verify-call, Thread.sleep, happy path only
+- API spec: spec / flow drift, path mismatch, required field missing
 
 ### Quality Review (mirrors agents/quality-reviewer.md)
-- Apex naming (PascalCase / camelCase / ALL_CAPS_SNAKE_CASE)
-- Sharing keyword and AccessLevel present
-- LWC: SLDS utility classes, `handle…` prefix on event handlers, `if:true`/`for:each` with key, `@wire` correctly used
-- SOQL: indexed WHERE fields, LIMIT, USER_MODE
-- Permission set naming `[AppPrefix]_[Component]_[AccessLevel]`
-- Score against the loaded rubric grid (e.g., generating-apex 150-pt)
+- Flow naming: kebab-case, business-meaningful, one responsibility per flow
+- Connector configs: one global per upstream, no inline credentials, timeouts + reconnection declared
+- DataWeave: %dw 2.0 header, output directive, functional composition, type annotations, module decomposition, lowerCamelCase variables
+- MUnit: suite naming, before-suite/before-test for shared setup, all connectors mocked, mocks cover happy + error, verify-call assertions
+- API spec quality: spec format consistent (RAML or OAS), examples reused via !include, trait conventions consistent, versioning consistent
+- Properties / secrets: per-environment files, secure-properties-config, encryption key externalized, no hardcoded URLs/IDs
+- Logging: DataWeave object payload, correlation-id propagated, no PII unredacted
+- Build / deploy: Mule runtime ≥ project floor, mule-maven-plugin v4.x+, api.layer declared, vCore allocation declared
+- Score against the loaded rubric grid (e.g., mule-flow-quality 150-pt)
 
 ### Architecture Review (mirrors agents/architecture-reviewer.md)
-- One Trigger Per Object; handler/service/selector layering
-- LWC composability; container/presentational split
-- Flow: subflows over duplication; fault paths
-- Agentforce: deploy order (fields → Apex → Flow → GenAi* → publish → activate); business rules in Flow/Apex not in prompt
-- Integration: Named Credentials, External Services, Platform Events
-- Cross-repo contracts (when `.adlc/config.yml` declares siblings) — REST URLs, Platform Event payloads stable
+- API-led layering declared in pom.xml; respected (System never calls Process; Experience never calls System directly)
+- APIkit-router bound to RAML/OAS for HTTP-facing apps
+- Connector configs are singletons; one per upstream; in dedicated globals.xml
+- Error-handling architecture: global error-handler sub-flow vs inline, consistent across project
+- Async / streaming architecture: batch-job for high-volume, repeatable-file-store-stream for >5MB, scatter-gather for parallel calls
+- API Manager / governance: required policies declared in Policies.md; promotion plan documented; live verification flagged as security-auditor follow-up (Platform MCP `view_api_instance_policies`)
+- Build / deploy: workers ≥ 2 in production, replicas ≥ 2 on RTF, vCore sized per environment
+- Exchange: reusable assets published; semver versioning; pom.xml dependencies resolve
+- Cross-repo contracts (when `.adlc/config.yml` declares siblings) — RAML/OAS endpoints, Kafka/JMS topic schemas stable
 
 ### Test Coverage Review (mirrors agents/test-auditor.md)
-- ≥75% Apex coverage with meaningful assertions
-- `Test.startTest`/`Test.stopTest` boundaries, `@TestSetup`, `System.runAs`
-- Mock callouts via `Test.setMock`; never SeeAllData=true
-- Bulk-trigger tests (200-record); LWC Jest happy + error
-- `sf agent test` specs current when `industries: [agentforce]`
+- ≥`mulesoft.coverage.munit_floor` (default 80) app coverage with meaningful assertions
+- ≥`mulesoft.coverage.flow_floor` (default 75) per-changed-flow coverage in brownfield mode
+- `<munit:before-suite>` / `<munit:before-test>` for shared fixtures; `<munit:after-suite>` for teardown
+- All external connectors mocked via `<munit-tools:mock-when>`; mocks cover happy + error paths
+- `<munit-tools:verify-call>` to assert connector invocation count
+- No `Thread.sleep`
+- DataWeave non-trivial logic has inline DW unit tests
+- New API endpoints have suites covering each verb + each documented response code
+- Governance scan ran (when `governance.api_manager_enabled: true`); live verification flagged: Platform MCP `check_policy_conformance`
 
 ### Security Review (mirrors agents/security-auditor.md)
-- FLS / sharing / USER_MODE compliance
-- Permission set anti-patterns (View/Modify All Data; Read+Delete combo; >10 object permissions; PII bundled with general access)
-- Permissions.md present and complete (when metadata changed)
-- Connected App OAuth scopes least-privilege
-- Named Credentials for callouts; no hardcoded URLs/tokens
+- No hardcoded credentials in committed XML/properties/DW (`tools/mule-lint hardcoded-credentials` block confirmed)
+- secure-properties-config used; encryption key externalized
+- No hardcoded URLs/IDs; all use `${...}` placeholders bound to per-environment property files
+- API Manager: required-policy list declared in Policies.md; live state matches (flag Platform MCP `view_api_instance_policies` follow-up); governance scan green
+- No production Basic Auth — JWT or OAuth 2.0
+- PII payloads passed through `Redact.dwl` before logging
+- Connected-app scopes least-privilege; `.env` (or equivalent) holding ANYPOINT_*_CLIENT_ID/SECRET is gitignored
 
 After running all checklists, fix Critical and Major issues inline. Commit fixes with `fix(scope): address verify finding [REQ-xxx]`.
 
