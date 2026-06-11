@@ -55,7 +55,7 @@ workflow script — and anything it imports — resolves through the existing sk
 symlink with no new install step:
 
 ```
-~/.claude/skills/workflows/adlc-sprint.workflow.js   →   <toolkit>/workflows/adlc-sprint.workflow.js
+~/.claude/skills-mulesoft/workflows/adlc-sprint.workflow.js   →   <toolkit>/workflows/adlc-sprint.workflow.js
 ```
 
 This mirrors how `templates/` and `partials/` are reached. Nothing in the
@@ -71,12 +71,12 @@ fall back to the global toolkit via the skills symlink.
 ```
 .adlc/workflows/<file>            # consumer-project copy (vendored by /init)
   ↓ if absent
-~/.claude/skills/workflows/<file> # canonical toolkit copy (via skills symlink)
+~/.claude/skills-mulesoft/workflows/<file> # canonical toolkit copy (via skills symlink)
 ```
 
 Why the local copy? Claude Code's sandbox blocks `Read` from paths outside the
 current working directory. When the engine runs inside a git worktree (e.g.
-`.worktrees/REQ-xxx/`), `~/.claude/skills/workflows/*` is unreadable by
+`.worktrees/REQ-xxx/`), `~/.claude/skills-mulesoft/workflows/*` is unreadable by
 subagents and any mid-skill `Read`. `/init` therefore vendors the **runtime
 files only** — `adlc-sprint.workflow.js` and this `README.md` — into the
 consumer's `.adlc/workflows/` (alongside `templates/` and `partials/`) so the

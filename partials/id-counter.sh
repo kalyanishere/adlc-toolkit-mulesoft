@@ -8,8 +8,8 @@
 #
 # Source this file at the start of every fenced block that allocates an ID:
 #
-#   sh .adlc/partials/id-counter.sh 2>/dev/null || sh ~/.claude/skills/partials/id-counter.sh
-#   . .adlc/partials/id-counter.sh 2>/dev/null || . ~/.claude/skills/partials/id-counter.sh
+#   sh .adlc/partials/id-counter.sh 2>/dev/null || sh ~/.claude/skills-mulesoft/partials/id-counter.sh
+#   . .adlc/partials/id-counter.sh 2>/dev/null || . ~/.claude/skills-mulesoft/partials/id-counter.sh
 #   ID=$(allocate_req)        # → "SFC-REQ-001"
 #
 # Functions:

@@ -10,7 +10,7 @@ You are closing out a completed feature after it has been merged. This skill ens
 
 ## Ethos
 
-!`sh .adlc/partials/ethos-include.sh 2>/dev/null || sh ~/.claude/skills/partials/ethos-include.sh`
+!`sh .adlc/partials/ethos-include.sh 2>/dev/null || sh ~/.claude/skills-mulesoft/partials/ethos-include.sh`
 
 ## Context
 
@@ -18,7 +18,7 @@ You are closing out a completed feature after it has been merged. This skill ens
 - Knowledge directory: !`ls .adlc/knowledge/ 2>/dev/null || echo "No knowledge directory"`
 - Current branch: !`git branch --show-current 2>/dev/null || echo "Not a git repo"`
 - Recent merges: !`git log --oneline --merges -10 2>/dev/null || echo "No merge history"`
-- SF quality checklist: !`cat .adlc/partials/sf-quality-checklist.md 2>/dev/null || cat ~/.claude/skills/partials/sf-quality-checklist.md 2>/dev/null || echo "No sf-quality-checklist found"`
+- Mule quality checklist: !`cat .adlc/partials/mule-quality-checklist.md 2>/dev/null || cat ~/.claude/skills-mulesoft/partials/mule-quality-checklist.md 2>/dev/null || echo "No mule-quality-checklist found"`
 
 ## Input
 
@@ -61,7 +61,7 @@ git -C "$ARTIFACT_ROOT" rev-parse --git-dir >/dev/null 2>&1 || {
 
 Substitute the resolved value everywhere later steps reference `<ARTIFACT_ROOT>`. Treat it as **immutable** for the rest of the run — once frozen, never re-derive (the worktree may be removed mid-run).
 
-In cross-repo mode you will resolve a `<ARTIFACT_ROOT>` per touched repo using the same rules — `repos[<id>].path` from `pipeline-state.json` is the canonical source. The PRIMARY repo's `<ARTIFACT_ROOT>` is the one used for ADLC spec/knowledge writes (specs and knowledge always live in the primary). Sibling-repo `<ARTIFACT_ROOT>` values are only needed when sibling-specific artifacts (e.g., `Permissions.md` in a Salesforce sibling — Step 3a) need to land on that sibling's main checkout.
+In cross-repo mode you will resolve a `<ARTIFACT_ROOT>` per touched repo using the same rules — `repos[<id>].path` from `pipeline-state.json` is the canonical source. The PRIMARY repo's `<ARTIFACT_ROOT>` is the one used for ADLC spec/knowledge writes (specs and knowledge always live in the primary). Sibling-repo `<ARTIFACT_ROOT>` values are only needed when sibling-specific artifacts (e.g., `Policies.md` in a sibling Mule app — Step 3a) need to land on that sibling's main checkout.
 
 ### Step 1: Identify the Feature
 1. If given a REQ ID, locate all artifacts under `<ARTIFACT_ROOT>/.adlc/specs/REQ-xxx-*/`
@@ -117,66 +117,67 @@ In cross-repo mode you will resolve a `<ARTIFACT_ROOT>` per touched repo using t
 4. If any tasks were deferred or descoped, note them in the requirement file under a "Deferred" section
 5. If `<ARTIFACT_ROOT>/.adlc/specs/REQ-xxx-*/pipeline-state.json` exists, update it: set `"completed": true`, add a final entry to `phaseHistory` with `{phase, name, startedAt: <currentPhaseStartedAt>, completedAt: <now>}`, and clear `currentPhaseStartedAt` (set it to `null`) since no phase is in flight after wrapup. **`<now>` MUST be the literal output of `date -u +"%Y-%m-%dT%H:%M:%SZ"` run via the Bash tool** — never typed in by the LLM. Same rule applies anywhere else this skill writes a timestamp.
 
-### Step 3a: Salesforce — Permissions.md gate
+### Step 3a: MuleSoft — Policies.md gate
 
-Skip this step in cross-repo mode for any sibling that did NOT touch Salesforce metadata.
+Skip this step in cross-repo mode for any sibling that did NOT touch Mule API artifacts.
 
-For every Salesforce repo touched by this REQ that introduced or modified metadata (custom objects, custom fields, Apex classes, Apex triggers, LWC bundles, Flows, custom tabs, custom permissions), verify that a `Permissions.md` file exists and is current. Salesforce-rules.md mandates this file per feature, with assignment matrix and dependency mapping.
+For every Mule repo touched by this REQ that introduced or modified API artifacts (RAML/OAS specs under `src/main/resources/api/`, public-facing `<http:listener>` flows, API instance registrations) AND has `mulesoft.governance.api_manager_enabled: true` in `.adlc/config.yml`, verify that a `Policies.md` file exists and is current. mulesoft-rules.md mandates this file per feature touching API artifacts, with policy assignments + environment promotion plan + governance scan evidence.
 
 Search order:
 
-1. `.adlc/specs/REQ-xxx-*/Permissions.md` — preferred (lives with the spec)
-2. `force-app/main/default/permissionsets/<feature>/Permissions.md` — alternative
-3. `Permissions.md` at the repo root with frontmatter `req: REQ-xxx`
+1. `.adlc/specs/REQ-xxx-*/Policies.md` — preferred (lives with the spec)
+2. `Policies.md` at the repo root with frontmatter `req: REQ-xxx`
 
-If the file is **absent**, generate it from `templates/permissions-template.md` (or fall back to `~/.claude/skills/templates/permissions-template.md`). Populate:
+If the file is **absent**, generate it from `templates/policies-template.md` (or fall back to `~/.claude/skills-mulesoft/templates/policies-template.md`). Populate:
 
-- `id` field as `PERMS-<REQ-id>`
+- `id` field as `POLICIES-<REQ-id>`
 - `req` field as the current REQ id
-- `app_prefix` from `.adlc/config.yml` `salesforce.app_prefix`
-- The **Permission sets generated** table — list every `*.permissionset-meta.xml` file under `force-app/main/default/permissionsets/` that has a frontmatter `req: REQ-xxx` OR was created in this REQ's commits (`git log --diff-filter=A`)
-- The **Dependency mapping** table — for each set, list which Apex class / SObject / field / flow it grants access to (read the permission set XML)
-- Leave the **Assignment matrix** rows as placeholder personas — surface this to the user so they can fill in real persona names
+- `app_prefix` from `.adlc/config.yml` `mulesoft.app_prefix`
+- `environment` field per the target deploy environment
+- The **API instances covered** table — list every API instance touched by this REQ (read API spec + APIkit-router bindings; cross-reference with Platform MCP `list_apis` for live state when available)
+- The **Policies applied** table — list every policy from `mulesoft.governance.required_policies` plus any additional policies declared in the REQ (e.g., `header-injection`, `ip-allowlist`)
+- The **Policy promotion plan** table — Sandbox → Staging → Production rows
+- The **Governance scan** table — populated after `anypoint-cli-v4 governance:validate` (or Platform MCP `check_policy_conformance`) runs in Step 6
 
-If the file is **present but stale** (lists permission sets that no longer exist in the worktree, OR is missing permission sets that DO exist), regenerate the affected rows.
+If the file is **present but stale** (lists API instances that no longer exist, OR is missing policies that the REQ added), regenerate the affected rows.
 
 If the file is **present and current**, walk its anti-pattern checklist:
 
-- ✅ No `View All Data` / `Modify All Data` granted in any permission set
-- ✅ Object-level access split per field where possible (FLS-first)
-- ✅ No permission set grants Read AND Delete on the same object
-- ✅ No permission set lists more than 10 object permissions
-- ✅ Sensitive data sits in a dedicated set, not bundled with general feature access
+- ✅ No policy applied through API Manager UI without a corresponding repo-tracked spec
+- ✅ No public API without `client-id-enforcement` (or waiver justification)
+- ✅ No production API using Basic Auth — JWT or OAuth 2.0 only
+- ✅ No `rate-limiting` configured at "unlimited" or with limits inconsistent with the contract SLA
+- ✅ No environment promotion that skips Staging
+- ✅ No promotion to Production without a green governance scan
 
-Run `python3 tools/sf-lint/check.py` over the touched permset files; surface any `perm-set-naming` or `perm-set-anti-pattern` finding as a wrapup blocker. The user must acknowledge before proceeding to Step 4.
+Run `sh tools/mule-preflight/check.sh policies` (or `sh ~/.claude/skills-mulesoft/tools/mule-preflight/check.sh policies`); surface any failure as a wrapup blocker. The user must acknowledge before proceeding to Step 4.
 
-If sf-lint flags permset findings, **STOP** — the merge in Step 2 has already happened, but knowledge capture and deploy in Step 4–6 should not proceed until the permission posture is corrected. Surface the findings and wait.
+If preflight flags Policies.md findings, **STOP** — the merge in Step 2 has already happened, but knowledge capture and deploy in Step 4–6 should not proceed until the policy posture is corrected. Surface the findings and wait.
 
-### Step 3b: Salesforce — Agentforce deploy-order gate
+### Step 3b: MuleSoft — Governance scan & API Manager policy live-state verification
 
-Skip this step unless `.adlc/config.yml` `salesforce.industries:` includes `agentforce`.
+Skip this step unless `.adlc/config.yml` `mulesoft.governance.api_manager_enabled: true`.
 
-Salesforce-rules.md mandates the deploy order for Agentforce features:
+mulesoft-rules.md mandates that every API spec passes governance validation before merge:
 
 ```
-fields/metadata → Apex → Flow → GenAiPromptTemplate / GenAiFunction / GenAiPlugin → publish → sf agent activate
+anypoint-cli-v4 governance:validate (or Platform MCP check_policy_conformance) → green
 ```
 
-If this REQ touched Agentforce metadata (any `.agent` file, `.genAiFunction-meta.xml`, `.genAiPlugin-meta.xml`, `.genAiPromptTemplate-meta.xml`), confirm:
+If this REQ touched Mule API artifacts (any `.raml`/OAS YAML/JSON under `src/main/resources/api/`), confirm:
 
-1. **API version**: every touched Agentforce metadata file declares `<apiVersion>` ≥ `66.0`. Grep for `<apiVersion>` and reject anything below 66.0:
+1. **Mule runtime version**: `pom.xml` declares `<app.runtime>` ≥ `mulesoft.mule_runtime` from `.adlc/config.yml`. Grep `pom.xml`:
    ```sh
-   find force-app -path '*/genAi*-meta.xml' -o -name '*.agent' | xargs grep -hE '<apiVersion>([0-9.]+)' | awk -F'[<>]' '{ if ($3 < 66.0) print $0 }'
+   grep -E '<app\.runtime>[0-9.]+</app\.runtime>' pom.xml
    ```
-2. **Deploy order**: walk the deploy log for the most recent sandbox deploy (from Step 6, OR `sf project deploy report --target-org <sandbox-alias>`) and confirm the dependency-order:
-   - Custom fields and metadata files appear in the deploy result before Apex
-   - Apex appears before Flow
-   - Flow appears before GenAi* (`GenAiFunction`, `GenAiPlugin`, `GenAiPromptTemplate`)
-   - `sf agent activate` is the last step
-3. **Variant-correct user**: read `.adlc/config.yml` `salesforce.agentforce_variant`. If `Service`, confirm a dedicated Einstein Agent User + system permission set was deployed; if `Employee`, confirm `default_agent_user` is omitted from the agent definition. Surface a finding if mismatched.
-4. **`@InvocableVariable` wrappers**: every `@InvocableMethod` referenced by an Agent Script `apex://` target uses an `@InvocableVariable` wrapper class with named fields — never a bare `List<T>`. Grep `force-app/main/default/classes/*.cls` for `@InvocableMethod` and confirm.
+2. **Java version**: `pom.xml` declares `<maven.compiler.source>` and `<maven.compiler.target>` matching `mulesoft.java_version` from `.adlc/config.yml`.
+3. **API layer declared**: `pom.xml` `<properties>` contains `<api.layer>system|process|experience</api.layer>`.
+4. **Governance ruleset configured**: `.adlc/config.yml` declares `mulesoft.governance.governance_ruleset`. If missing AND `governance.api_manager_enabled: true`, surface as a finding.
+5. **Governance scan**: run `anypoint-cli-v4 governance:validate --rulesets <ruleset> <api-spec-files>` against every touched RAML/OAS spec. Capture the result in `Policies.md` "Governance scan" section.
+6. **Live policy state**: when the deploy in Step 6 has landed, call Platform MCP `view_api_instance_policies` for each registered API instance and confirm the live state matches the `Policies.md` declaration. If it drifts (declared in repo but not applied), surface as a Critical finding ("declared but not applied").
+7. **Required policies match**: every policy in `mulesoft.governance.required_policies` is either declared in `Policies.md` OR has an explicit waiver row.
 
-If any check fails, surface as a wrapup blocker. The corrective action is a forward-fix deploy (Salesforce has no rollback) — recommend the user open a **`/bugfix`** if the defect is in already-shipped behavior (a regression, compile error, runtime exception, FLS oversight, or any "what shipped doesn't work as documented"), OR re-run `/canary` against the sandbox after fixing.
+If any check fails, surface as a wrapup blocker. The corrective action is a forward-fix deploy — recommend the user open a **`/bugfix`** if the defect is in already-shipped behavior (broken governance scan, missing policy on a deployed API, payload schema drift from spec), OR re-run `/canary` against sandbox after fixing.
 
 ### Bug vs follow-up REQ — decision rule
 
@@ -218,7 +219,7 @@ Evaluate whether any decisions, patterns, or lessons should be persisted:
 #### Assumptions Validated or Invalidated
 - Review assumptions from the requirement spec
 - Log any that were validated, invalidated, or still unresolved to `<ARTIFACT_ROOT>/.adlc/knowledge/assumptions/` (NEVER `./...` — cwd may be a worktree that's about to be removed)
-- Use the assumption template (check `<ARTIFACT_ROOT>/.adlc/templates/assumption-template.md` first, fall back to `~/.claude/skills/templates/assumption-template.md`)
+- Use the assumption template (check `<ARTIFACT_ROOT>/.adlc/templates/assumption-template.md` first, fall back to `~/.claude/skills-mulesoft/templates/assumption-template.md`)
 - Name files: `ASSUME-xxx-slug.md`. Determine the next ID using the atomic counter at `<ARTIFACT_ROOT>/.adlc/.next-assume` (LESSON-110), wrapped in a POSIX `mkdir`-lock with a symlink pre-check (LESSON-014) so concurrent `/sprint` wrapups can't lose updates and a swapped-in symlink can't redirect the counter. **The counter and its lock live under the main checkout — not the worktree** (otherwise concurrent worktrees each see their own counter and collide):
   ```bash
   # ARTIFACT_ROOT was pinned in Step 0 — pass through, never re-derive.
@@ -251,12 +252,12 @@ Claude drafts the lesson directly from in-context conversation memory. Consider:
   - Approaches that didn't work and why?
   - Things that worked particularly well?
 - Log notable lessons to `<ARTIFACT_ROOT>/.adlc/knowledge/lessons/` if they'd help future work (NEVER `./.adlc/knowledge/lessons/` — cwd may be a worktree that's about to be removed)
-- Use the lesson template (check `<ARTIFACT_ROOT>/.adlc/templates/lesson-template.md` first, fall back to `~/.claude/skills/templates/lesson-template.md`)
+- Use the lesson template (check `<ARTIFACT_ROOT>/.adlc/templates/lesson-template.md` first, fall back to `~/.claude/skills-mulesoft/templates/lesson-template.md`)
 - **Filename format is `<XYZ>-LESSON-NNN-slug.md`** (e.g., `SFC-LESSON-041-signed-url-ttl-mismatch.md`). The `<XYZ>` prefix comes from `project.shortname` in `.adlc/config.yml`. Legacy un-namespaced files (`LESSON-NNN-slug.md`) are still valid history; only **new** allocations get the prefix. Slugs are lowercase kebab-case, ≤6 words. Do not use date-prefixed names (`2026-MM-DD-…md`) or bare numeric prefixes (`034-…md`).
 - **Allocate the next ID via the canonical allocator partial.** IDs are per-project, namespaced by `project.shortname`. The counter lives at `<ARTIFACT_ROOT>/.adlc/.next-lesson`. First allocation in a project bootstraps from the highest existing `<XYZ>-LESSON-NNN` and legacy `LESSON-NNN` under `.adlc/knowledge/lessons/`, so re-running `/init` mid-project never resets to 1. The lock at `.adlc/.next-lesson.lock.d` is shared with `/bugfix`'s lesson capture so concurrent runs mutually exclude.
   ```bash
   cd "$ARTIFACT_ROOT"
-  . .adlc/partials/id-counter.sh 2>/dev/null || . ~/.claude/skills/partials/id-counter.sh
+  . .adlc/partials/id-counter.sh 2>/dev/null || . ~/.claude/skills-mulesoft/partials/id-counter.sh
   LESSON_ID=$(allocate_lesson)
   # `allocate_lesson` runs in $(...). `return 1` from the partial only exits the
   # subshell — guard the parent context (LESSON-015):
@@ -375,18 +376,31 @@ Create a concise summary suitable for sharing with the team. In cross-repo mode,
 
 ### Step 6: Deploy to sandbox
 
-Walk the touched Salesforce repos and promote the change set to **sandbox only**. Staging and production deploys are owned by the project's CI/CD pipeline (GitHub Actions, Gearset, Copado, etc.) — not by the ADLC pipeline. The wrapup hands off a merged + sandbox-deployed change set; the team promotes it forward.
+Walk the touched Mule repos and promote the change set to **sandbox only**. Staging and production deploys are owned by the project's CI/CD pipeline (GitHub Actions + Anypoint, Gearset for Anypoint, etc.) — not by the ADLC pipeline. The wrapup hands off a merged + sandbox-deployed change set; the team promotes it forward.
 
-1. **Skip if no deployable Salesforce changes** (e.g., only ADLC docs / spec edits). The wrapup may complete with the merge alone.
-2. **Deploy to sandbox** via `/canary` (no arguments — the skill always targets `orgs.sandbox` from `.adlc/config.yml`). It runs three local pre-flight passes, then `sf project deploy validate`, then `sf project deploy start`. The `sf project deploy start:*` permission is on the `ask` list — Claude Code surfaces an ask-prompt; the user confirms once.
-3. **Smoke gates** run automatically inside `/canary`:
-   - When `salesforce.industries:` includes `agentforce`, `sf agent test run` against `agentforce_test_specs:`.
-   - When `playwright_specs:` is set, `npx playwright test --project=sandbox` against the just-deployed sandbox.
+1. **Skip if no deployable Mule changes** (e.g., only ADLC docs / spec edits). The wrapup may complete with the merge alone.
+2. **Run pre-deploy gate** via `tools/mule-preflight/check.sh`:
+   ```sh
+   sh tools/mule-preflight/check.sh
+   ```
+   This runs lint → mvn munit:test → coverage → secrets re-scan → policies declaration check → governance:validate. Any failure stops the deploy.
+3. **Deploy to sandbox** via `/canary` (no arguments — the skill always targets the Sandbox environment from `.adlc/config.yml` `mulesoft.anypoint_environment` set to "Sandbox", or falls back to the Sandbox env id resolved from the org). The skill chooses the deploy actor based on `mulesoft.deploy_target`:
+   - `cloudhub2` (default): DX MCP `deploy_mule_application` / `update_mule_application` for the Sandbox environment.
+   - `rtf`: `mvn deploy -P rtf-sandbox`.
+   - `onprem`: `mvn deploy -P onprem-sandbox` against the Anypoint Runtime Manager target.
+   The `mvn deploy:*`, `anypoint-cli-v4 runtime-mgr application deploy:*`, and `anypoint-cli-v4 runtime-mgr cloudhub-application deploy:*` permissions are on the **allow** list for unattended pipeline runs — move them to `ask` if you want a human gate.
+4. **Smoke gates** run automatically inside `/canary`:
+   - **MUnit** suite (`mvn munit:test`) — every test passes; coverage ≥ floor.
+   - **Postman/Newman** (when `mulesoft.smoke_tests:` is configured) — collection runs against the just-deployed Sandbox endpoint.
+   - **Governance scan** (`anypoint-cli-v4 governance:validate` OR Platform MCP `check_policy_conformance`) — every API spec passes the configured ruleset.
+   - **API instance policy state** (Platform MCP `view_api_instance_policies`) — live policies match the declarations in `Policies.md`. Drift is a deploy blocker.
+   - **Playwright** (when `playwright_specs:` is set — rare for Mule, only Experience APIs returning HTML) — happy-path UI smoke against Sandbox.
    On any failure, STOP — recommend a forward-fix; do NOT mark the wrapup complete.
-4. **Confirm**: `/canary` emits a per-step report. Pin the deploy id and the per-step pass/fail counts into the ship summary.
-5. **Hand off promotion**: emit a one-line summary in the ship report — "Sandbox deploy ✓ — promote to staging/prod via your CI/CD pipeline (`<pipeline-name>` in `.github/workflows/` or equivalent)." The ADLC pipeline does not deploy past sandbox under any circumstances.
-6. **Vlocity / OmniStudio DataPacks**: when `industries:` includes `omnistudio`, after the standard sf deploy, confirm any DataPack pack deploys via `vlocity packDeploy` (the `Bash(vlocity packDeploy:*)` permission is also on `ask`). Run `vlocity packGetDiffs` first to confirm the pack manifest matches the deploy plan.
-7. In cross-repo mode, emit a one-line sandbox-deploy status per touched repo in the ship summary. External (non-SFDC) sibling repos use their own deploy mechanism — surface a TODO if their deploy is outside this skill's scope.
+5. **API Manager policy promotion**: if this REQ added or modified API Manager policy declarations in `Policies.md`, the `/canary` skill calls Platform MCP `apply_policy_to_instance` for each declared policy on the Sandbox API instance. Confirm the result via `view_api_instance_policies` before continuing.
+6. **Exchange asset publication** (when `mulesoft.features.exchange_publishing: true` AND the REQ added a reusable asset): publish via DX MCP `create_and_manage_assets` (preferred) or `mvn deploy -P exchange-publish`. Confirm with Platform MCP `search_global_assets` that the asset shows up in Exchange.
+7. **Confirm**: `/canary` emits a per-step report. Pin the deploy id (CloudHub deploy id, RTF replica id, or Maven build timestamp) and the per-step pass/fail counts into the ship summary.
+8. **Hand off promotion**: emit a one-line summary in the ship report — "Sandbox deploy ✓ — promote to Staging/Production via your CI/CD pipeline (`<pipeline-name>` in `.github/workflows/` or equivalent)." The ADLC pipeline does not deploy past Sandbox under any circumstances.
+9. In cross-repo mode, emit a one-line sandbox-deploy status per touched repo in the ship summary. External (non-Mule) sibling repos use their own deploy mechanism — surface a TODO if their deploy is outside this skill's scope.
 
 ### Step 7: Clean Up
 1. Check for any temporary files, debug logging, or feature flags that should be removed

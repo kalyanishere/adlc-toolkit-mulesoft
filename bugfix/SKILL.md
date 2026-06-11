@@ -10,12 +10,12 @@ You are fixing a bug using a streamlined workflow that skips the full spec cerem
 
 ## Ethos
 
-!`sh .adlc/partials/ethos-include.sh 2>/dev/null || sh ~/.claude/skills/partials/ethos-include.sh`
+!`sh .adlc/partials/ethos-include.sh 2>/dev/null || sh ~/.claude/skills-mulesoft/partials/ethos-include.sh`
 
 ## Context
 
 - Project config: !`cat .adlc/config.yml 2>/dev/null || echo "No config — single-repo legacy mode"`
-- Bug template: !`cat .adlc/templates/bug-template.md 2>/dev/null || cat ~/.claude/skills/templates/bug-template.md 2>/dev/null || echo "No bug template found"`
+- Bug template: !`cat .adlc/templates/bug-template.md 2>/dev/null || cat ~/.claude/skills-mulesoft/templates/bug-template.md 2>/dev/null || echo "No bug template found"`
 - Conventions: !`cat .adlc/context/conventions.md 2>/dev/null || echo "No conventions found"`
 - Existing bugs: !`ls .adlc/bugs/ 2>/dev/null || echo "No bugs directory found"`
 
@@ -64,7 +64,7 @@ Treat `<ARTIFACT_ROOT>` as **immutable** for the rest of the run. In cross-repo 
    - Determine the next BUG ID using the canonical allocator partial. IDs are **per-project, namespaced by `project.shortname`** — `<XYZ>-BUG-NNN` (e.g., `SFC-BUG-014`). The counter lives at `<ARTIFACT_ROOT>/.adlc/.next-bug`. First allocation in a project bootstraps from the highest existing `<XYZ>-BUG-NNN` and legacy `BUG-NNN` under `.adlc/bugs/`, so re-running `/init` mid-project never resets to 1.
      ```bash
      cd "$ARTIFACT_ROOT"
-     . .adlc/partials/id-counter.sh 2>/dev/null || . ~/.claude/skills/partials/id-counter.sh
+     . .adlc/partials/id-counter.sh 2>/dev/null || . ~/.claude/skills-mulesoft/partials/id-counter.sh
      BUG_ID=$(allocate_bug)
      # `allocate_bug` runs in $(...). `return 1` from the partial only exits the
      # subshell — guard the parent context (LESSON-015):
@@ -220,14 +220,14 @@ Evaluate honestly: did this bug reveal something a future implementer should kno
 If yes, write a lesson to `<ARTIFACT_ROOT>/.adlc/knowledge/lessons/<LESSON_ID>-slug.md` using the canonical allocator partial. IDs are per-project, namespaced by `project.shortname` — `<XYZ>-LESSON-NNN`. The counter at `<ARTIFACT_ROOT>/.adlc/.next-lesson` and the lock at `.adlc/.next-lesson.lock.d` are shared with `/wrapup`'s lesson capture so concurrent `/bugfix` and `/wrapup` runs mutually exclude. First allocation in a project bootstraps from the highest existing `<XYZ>-LESSON-NNN` and legacy `LESSON-NNN`, never resets to 1.
 ```bash
 cd "$ARTIFACT_ROOT"
-. .adlc/partials/id-counter.sh 2>/dev/null || . ~/.claude/skills/partials/id-counter.sh
+. .adlc/partials/id-counter.sh 2>/dev/null || . ~/.claude/skills-mulesoft/partials/id-counter.sh
 LESSON_ID=$(allocate_lesson)
 [ -n "$LESSON_ID" ] || { echo "ERROR: failed to allocate LESSON id — aborting before writing malformed lesson" >&2; exit 1; }
 LESSON_NUM=${LESSON_ID##*-}
 ```
 The partial enforces `project.shortname` (`^[A-Z]{3}$`), `mkdir`-based lock with symlink pre-check (LESSON-014), empty-counter fail-loud guards (LESSON-015), and a first-run bootstrap that scans `.adlc/knowledge/lessons/` for the high-water mark across BOTH legacy and namespaced ids. The legacy machine-global `~/.claude/.global-next-lesson` is no longer read or written.
 
-Use the lesson template (`<ARTIFACT_ROOT>/.adlc/templates/lesson-template.md`, fall back to `~/.claude/skills/templates/lesson-template.md`). Filename format is `<LESSON_ID>-slug.md` (e.g., `SFC-LESSON-014-static-vs-instance.md`). Slugs are lowercase kebab-case, ≤6 words. Include `domain`, `component`, and `tags` so future runs of `/spec`, `/architect`, `/reflect`, and `/review` can filter by relevance.
+Use the lesson template (`<ARTIFACT_ROOT>/.adlc/templates/lesson-template.md`, fall back to `~/.claude/skills-mulesoft/templates/lesson-template.md`). Filename format is `<LESSON_ID>-slug.md` (e.g., `SFC-LESSON-014-static-vs-instance.md`). Slugs are lowercase kebab-case, ≤6 words. Include `domain`, `component`, and `tags` so future runs of `/spec`, `/architect`, `/reflect`, and `/review` can filter by relevance.
 
 If the bug genuinely produced no useful lesson (one-line typo, etc.), say so explicitly in the final summary — don't silently skip.
 

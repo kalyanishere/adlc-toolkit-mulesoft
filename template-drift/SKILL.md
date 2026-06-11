@@ -1,6 +1,6 @@
 ---
 name: template-drift
-description: Detect drift between this project's `.adlc/templates/` copies and the canonical templates in `~/.claude/skills/templates/`, and between `.adlc/partials/*.sh` and `~/.claude/skills/partials/*.sh`. Use when the user says "check template drift", "template drift", "are my templates out of date", or wants to know whether toolkit template or partial updates have landed in this project yet. Reports a per-file diff summary, flags intentional customizations from accidental staleness for templates, and reports any partial drift as `stale` (partials are shared executable code — no customization classification). Also flags stale `node:test`/`*.test.js` files left under `.adlc/workflows/` by an older `/init` (a Jest landmine in `"type":"module"` repos).
+description: Detect drift between this project's `.adlc/templates/` copies and the canonical templates in `~/.claude/skills-mulesoft/templates/`, and between `.adlc/partials/*.sh` and `~/.claude/skills-mulesoft/partials/*.sh`. Use when the user says "check template drift", "template drift", "are my templates out of date", or wants to know whether toolkit template or partial updates have landed in this project yet. Reports a per-file diff summary, flags intentional customizations from accidental staleness for templates, and reports any partial drift as `stale` (partials are shared executable code — no customization classification). Also flags stale `node:test`/`*.test.js` files left under `.adlc/workflows/` by an older `/init` (a Jest landmine in `"type":"module"` repos).
 argument-hint: Optional template name (e.g., "requirement-template") to scope the check to a single file
 ---
 
@@ -10,12 +10,12 @@ You are checking whether the project's local `.adlc/templates/` copies still mat
 
 ## Ethos
 
-!`sh .adlc/partials/ethos-include.sh 2>/dev/null || sh ~/.claude/skills/partials/ethos-include.sh`
+!`sh .adlc/partials/ethos-include.sh 2>/dev/null || sh ~/.claude/skills-mulesoft/partials/ethos-include.sh`
 
 ## Context
 
 - Project templates dir: !`ls .adlc/templates/ 2>/dev/null || echo "No .adlc/templates/ directory — run /init first"`
-- Toolkit templates dir: !`ls ~/.claude/skills/templates/ 2>/dev/null || echo "Toolkit templates not found at ~/.claude/skills/templates/"`
+- Toolkit templates dir: !`ls ~/.claude/skills-mulesoft/templates/ 2>/dev/null || echo "Toolkit templates not found at ~/.claude/skills-mulesoft/templates/"`
 - Current directory: !`pwd`
 
 ## Input
@@ -25,18 +25,18 @@ Scope: $ARGUMENTS (optional — single template name to check; otherwise all tem
 ## Prerequisites
 
 1. `.adlc/templates/` must exist in the current project. If it does not, stop and tell the user: "This project has no local templates — it uses toolkit templates directly. No drift to check." (New projects per the `/init` Step 6 policy don't copy templates locally.)
-2. `~/.claude/skills/templates/` must resolve through the symlink. If it does not, stop and tell the user: "The adlc-toolkit symlink is broken. Verify `readlink ~/.claude/skills` points to the toolkit repo."
+2. `~/.claude/skills-mulesoft/templates/` must resolve through the symlink. If it does not, stop and tell the user: "The adlc-toolkit symlink is broken. Verify `readlink ~/.claude/skills` points to the toolkit repo."
 
 ## Instructions
 
 ### Step 1: Enumerate Templates to Compare
 
-1. If the user passed a scope argument (e.g. `requirement-template`), only check `.adlc/templates/<scope>.md` vs `~/.claude/skills/templates/<scope>.md`.
-2. Otherwise list every `*.md` file in `.adlc/templates/` AND every `*.md` file in `~/.claude/skills/templates/`. Compare the union of both sets — this catches templates that exist in the toolkit but not in the project (new templates added upstream) and templates in the project but not in the toolkit (legacy or custom-to-project files).
+1. If the user passed a scope argument (e.g. `requirement-template`), only check `.adlc/templates/<scope>.md` vs `~/.claude/skills-mulesoft/templates/<scope>.md`.
+2. Otherwise list every `*.md` file in `.adlc/templates/` AND every `*.md` file in `~/.claude/skills-mulesoft/templates/`. Compare the union of both sets — this catches templates that exist in the toolkit but not in the project (new templates added upstream) and templates in the project but not in the toolkit (legacy or custom-to-project files).
 
 ### Step 2: Detect Template Drift
 
-For each template in the comparison set, run `diff -u ~/.claude/skills/templates/<name>.md .adlc/templates/<name>.md`. Capture:
+For each template in the comparison set, run `diff -u ~/.claude/skills-mulesoft/templates/<name>.md .adlc/templates/<name>.md`. Capture:
 - **Missing upstream**: template exists locally but not in toolkit (legacy or custom)
 - **Missing locally** (a.k.a. `missing`): template exists in toolkit but not in project (upstream added, not yet copied)
 - **Identical** (a.k.a. `synced`): no diff (drift = 0)
@@ -52,25 +52,25 @@ Partials (`*.sh` files) are a second sync surface alongside templates. Unlike te
 
 Partials are shared executable code, not customizable content; intentional consumer-side modification of a partial would shadow the toolkit's gate logic and is the threat model `/template-drift` is meant to detect. Therefore any drift in partials is reported as `stale` with no customization classification. This is a security posture: a consumer with a modified `ethos-include.sh` could silently strip the ETHOS preamble from every skill invocation, and a consumer with a modified gate partial could bypass ADLC phase gates. Treating every partial diff as `stale` (and surfacing it loudly) is the correct default.
 
-For each `*.sh` file in `~/.claude/skills/partials/` (use a POSIX-safe glob — guard with `[ -e "$f" ]` so that an empty toolkit partials directory does not iterate the literal pattern), compare against `.adlc/partials/<basename>`:
+For each `*.sh` file in `~/.claude/skills-mulesoft/partials/` (use a POSIX-safe glob — guard with `[ -e "$f" ]` so that an empty toolkit partials directory does not iterate the literal pattern), compare against `.adlc/partials/<basename>`:
 
-- Run `diff -q .adlc/partials/<basename> ~/.claude/skills/partials/<basename>`.
+- Run `diff -q .adlc/partials/<basename> ~/.claude/skills-mulesoft/partials/<basename>`.
 - Exit 0 → `synced` (both exist, identical)
 - Exit 1 → `stale` (both exist, content differs)
 - Consumer file absent (`.adlc/partials/<basename>` does not exist) → `missing` (toolkit has it, consumer doesn't — consumer needs to re-run `/init` to copy it down)
 
-Also check the reverse direction: any `*.sh` in `.adlc/partials/` that does NOT exist in `~/.claude/skills/partials/` should be reported as `missing upstream` (legacy or rogue partial — flag it; do not auto-delete).
+Also check the reverse direction: any `*.sh` in `.adlc/partials/` that does NOT exist in `~/.claude/skills-mulesoft/partials/` should be reported as `missing upstream` (legacy or rogue partial — flag it; do not auto-delete).
 
 If `.adlc/partials/` does not exist at all in the consumer project, report every toolkit partial as `missing` and recommend running `/init`.
 
 ### Step 3a: Detect Stale Salesforce Quality Checklist
 
-`partials/sf-quality-checklist.md` is the always-on baseline that the implementer and review panel source. It is generated from `.adlc/context/salesforce-rules.md` (the source of truth). Drift between the two is a posture risk — the linter and the agents read the partial; if it's stale relative to the rules document, an enforced rule may not actually be enforced.
+`partials/mule-quality-checklist.md` is the always-on baseline that the implementer and review panel source. It is generated from `.adlc/context/mulesoft-rules.md` (the source of truth). Drift between the two is a posture risk — the linter and the agents read the partial; if it's stale relative to the rules document, an enforced rule may not actually be enforced.
 
 For consumer projects:
 
-- If `.adlc/partials/sf-quality-checklist.md` exists, treat it as a partial drift candidate per Step 3 (any drift is `stale` — partials have no customization classification).
-- If `.adlc/context/salesforce-rules.md` exists in the consumer but `partials/sf-quality-checklist.md` does NOT (in either consumer or toolkit), surface a one-line note that the consumer's rules document is unwired from the always-on baseline.
+- If `.adlc/partials/mule-quality-checklist.md` exists, treat it as a partial drift candidate per Step 3 (any drift is `stale` — partials have no customization classification).
+- If `.adlc/context/mulesoft-rules.md` exists in the consumer but `partials/mule-quality-checklist.md` does NOT (in either consumer or toolkit), surface a one-line note that the consumer's rules document is unwired from the always-on baseline.
 
 ### Step 3b: Detect Stale Workflow Test Files (Jest landmine)
 
@@ -167,7 +167,7 @@ Diff is 3 added / 1 removed lines, all whitespace and one field rename:
 - `status: [status]` → `status: pending`
 - Extra blank line after frontmatter
 
-Action: safe to sync from toolkit. Propose a one-line change: copy `~/.claude/skills/templates/task-template.md` over `.adlc/templates/task-template.md`.
+Action: safe to sync from toolkit. Propose a one-line change: copy `~/.claude/skills-mulesoft/templates/task-template.md` over `.adlc/templates/task-template.md`.
 ```
 
 ### Step 6: Offer Reconciliation Actions
@@ -178,19 +178,19 @@ For each **accidental** template drift, each **missing locally** template, **eve
 ## Proposed Actions
 
 1. **task-template.md**: Copy from toolkit to project (accidental cosmetic drift).
-   Command: `cp ~/.claude/skills/templates/task-template.md .adlc/templates/task-template.md`
+   Command: `cp ~/.claude/skills-mulesoft/templates/task-template.md .adlc/templates/task-template.md`
 
 2. **lesson-template.md**: Copy from toolkit to project (toolkit added filename-lock comment).
-   Command: `cp ~/.claude/skills/templates/lesson-template.md .adlc/templates/lesson-template.md`
+   Command: `cp ~/.claude/skills-mulesoft/templates/lesson-template.md .adlc/templates/lesson-template.md`
 
 3. **assumption-template.md**: Copy from toolkit to project (upstream added, not yet in project).
-   Command: `cp ~/.claude/skills/templates/assumption-template.md .adlc/templates/assumption-template.md`
+   Command: `cp ~/.claude/skills-mulesoft/templates/assumption-template.md .adlc/templates/assumption-template.md`
 
 4. **ethos-include.sh** (partial, stale): Copy from toolkit to project. Partials have no customization classification — any drift is reported as `stale` (see Step 3 rationale).
-   Command: `cp ~/.claude/skills/partials/ethos-include.sh .adlc/partials/ethos-include.sh`
+   Command: `cp ~/.claude/skills-mulesoft/partials/ethos-include.sh .adlc/partials/ethos-include.sh`
 
 5. **spec-gate.sh** (partial, missing): Copy from toolkit to project.
-   Command: `mkdir -p .adlc/partials && cp ~/.claude/skills/partials/spec-gate.sh .adlc/partials/spec-gate.sh`
+   Command: `mkdir -p .adlc/partials && cp ~/.claude/skills-mulesoft/partials/spec-gate.sh .adlc/partials/spec-gate.sh`
 
 6. **.adlc/workflows/tests/** (stale workflow tests, Jest landmine): Remove. These are toolkit-internal `node:test` files that break `npm test` in `"type":"module"` repos; the runtime never needs them. Re-running `/init` also removes them.
    Command: `rm -rf .adlc/workflows/tests`

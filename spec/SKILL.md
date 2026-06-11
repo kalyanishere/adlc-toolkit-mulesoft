@@ -10,14 +10,14 @@ You are writing a requirement spec following the spec-driven ADLC process.
 
 ## Ethos
 
-!`sh .adlc/partials/ethos-include.sh 2>/dev/null || sh ~/.claude/skills/partials/ethos-include.sh`
+!`sh .adlc/partials/ethos-include.sh 2>/dev/null || sh ~/.claude/skills-mulesoft/partials/ethos-include.sh`
 
 ## Context
 
 - ADLC context: !`cat .adlc/context/project-overview.md 2>/dev/null || echo "No project overview found"`
-- Requirement template: !`cat .adlc/templates/requirement-template.md 2>/dev/null || cat ~/.claude/skills/templates/requirement-template.md 2>/dev/null || echo "No requirement template found"`
+- Requirement template: !`cat .adlc/templates/requirement-template.md 2>/dev/null || cat ~/.claude/skills-mulesoft/templates/requirement-template.md 2>/dev/null || echo "No requirement template found"`
 - Taxonomy: !`cat .adlc/context/taxonomy.md 2>/dev/null || echo "No taxonomy found — consider running /init to scaffold one"`
-- Sprint dashboard: !`sh ~/.claude/skills/tools/sprint-dashboard/launch.sh`
+- Sprint dashboard: !`sh ~/.claude/skills-mulesoft/tools/sprint-dashboard/launch.sh`
 
 ## Input
 
@@ -140,56 +140,56 @@ This rule overrides the general decomposition heuristic — even if the user exp
 
 ### Step 1.8: Decompose Multi-Layer Requests
 
-A single Salesforce feature request often spans multiple layers — Apex service, LWC, perm-set, FlexiPage placement — and bundling them into one REQ inflates complexity tier, balloons the review panel, mixes declarative with programmatic work, and forces every layer to ride the slowest one's gates. Decompose at the spec phase so each layer can be tested, reviewed, and shipped independently.
+A single MuleSoft feature request often spans multiple layers — System API spec, Process API flow logic, MUnit tests, governance policy declaration, Exchange asset publication — and bundling them into one REQ inflates complexity tier, balloons the review panel, mixes API-led layers (which should ship independently), and forces every layer to ride the slowest one's gates. Decompose at the spec phase so each layer can be tested, reviewed, and shipped independently.
 
 #### Step 1.8.1 — Detect layers
 
-After Step 1.7 has stripped any org-config references, classify the **remaining** scope against this Salesforce-specific cleavage table:
+After Step 1.7 has stripped any environment-config references, classify the **remaining** scope against this MuleSoft-specific cleavage table:
 
 | Layer | Signals in the request |
 |---|---|
-| `apex-service` | "service class", "helper", "selector", SOQL/DML logic, callable from elsewhere |
-| `apex-trigger` | "when X is created/updated", before/after insert/update/delete, record-change automation |
-| `apex-batch-async` | "nightly", "process N records", "queueable", "@future", "Schedulable", "Batchable" |
-| `apex-rest-callout` | inbound `@RestResource`, outbound `Http.send` against a Named Credential |
-| `lwc-component` | "card on the record page", "modal", "form", any reusable Lightning Web Component |
-| `react-bundle` | `ReactInternalApp` / `ReactExternalApp` (requires `salesforce.features.ui_bundles: true`) |
-| `flow-screen` | guided UI, screen flow, multi-step wizard with no LWC |
-| `flow-record-triggered` | record-triggered flow / autolaunched flow |
-| `omniscript` | OmniStudio OmniScript / FlexCard / IP / DataRaptor |
-| `agentforce-topic` | Agent topics, Actions, conversation flows |
-| `data-cloud` | DLO / DMO / CIO / segment / activation |
-| `permset` | declarative — perm-set membership, FLS, object/tab visibility |
-| `flexipage` | declarative — record page / app page / home page placement of components |
-| `custom-metadata` | CMDT records (configuration data, not code) |
-| `custom-object` | new sObject + fields (often a precondition for service/UI work) |
+| `api-spec-system` | new System API contract (RAML/OAS) for systems-of-record |
+| `api-spec-process` | new Process API contract orchestrating System APIs |
+| `api-spec-experience` | new Experience API contract for end-user / consumer endpoints |
+| `mule-flow` | new flow / sub-flow / batch job inside an existing app |
+| `mule-app-greenfield` | new Mule app project (`pom.xml` + `src/main/mule/` from scratch or Exchange template) |
+| `dataweave-module` | new shared `dw/Modules/*.dwl` (transformation logic, redaction utilities) |
+| `connector-config` | new global config (`<http:request-config>`, `<db:config>`, `<salesforce:sfdc-config>`, etc.) |
+| `munit-suite` | new MUnit suite covering an existing flow |
+| `api-manager-policy` | API Manager policy declaration / promotion (client-id-enforcement, rate-limiting, JWT/OAuth2) |
+| `governance-rule` | governance ruleset addition / modification |
+| `exchange-asset` | reusable Mule asset published to Anypoint Exchange (connector, template, fragment) |
+| `secure-properties` | new secure-properties config / encryption-key rotation |
+| `deploy-config` | `pom.xml` profile changes (vCore, replicas, region, deploy-target) |
+| `mcp-server` | Mule app exposing an MCP server (per `create_MCP_server`) |
 
-Tag every layer the request implies. A layer that only exists to *use* an artifact from another layer (e.g., a FlexiPage that hosts a new LWC) is a separate layer — that's the whole point of decomposing.
+Tag every layer the request implies. A layer that only exists to *use* an artifact from another layer (e.g., a Process API consuming a new System API) is a separate layer — that's the whole point of decomposing.
 
 #### Step 1.8.2 — Decide whether to decompose
 
 - **Single layer detected** → do NOT decompose. Continue to Step 2 with one REQ. Today's behavior.
 - **Two or more layers detected** → propose a decomposition (Step 1.8.3). The exception below still applies.
 
-**Declarative-only layers (`permset`, `flexipage`, `custom-metadata`)** that ride alongside code layers should usually be **routed to Setup, not pipelined**. They take seconds for a human to click together, they don't benefit from review-panel scrutiny, and pinning a code REQ behind their deploy adds 5-15 minutes of orchestration per layer for no quality gain. Prefer this routing unless the project explicitly tracks declarative changes through the pipeline (e.g., regulated industries with full audit trails).
+**Configuration-only layers (`api-manager-policy`, `secure-properties`, `deploy-config`)** that ride alongside code layers should usually be **routed to Anypoint Platform UI / config repos, not pipelined as code REQs**. Policy applications take seconds via Platform MCP `apply_policy_to_instance`; secure-property rotations are operational; deploy-config tweaks may live in a separate ops repo. Prefer this routing unless the project explicitly tracks every change through the pipeline (e.g., regulated industries with full audit trails — common in banking / healthcare).
 
-Treat these layers like the org-config artifacts in Step 1.7: capture them as a Setup hand-off note, not a child REQ:
+Treat these layers like the env-config artifacts in Step 1.7: capture them as a Platform hand-off note, not a child REQ:
 
-> *Permission set `Acme_Sales_Manager` field-level grant for the new field is excluded from the pipeline — apply it directly in Setup. FlexiPage placement of the new LWC on the Opportunity record page is excluded — drag the component in App Builder once the LWC REQ deploys.*
+> *API Manager `client-id-enforcement` policy on the new endpoint is excluded from the pipeline — apply via Platform MCP `apply_policy_to_instance` after deploy. Secure-property `salesforce.client_secret` rotation is operational — coordinate with the team's secrets-rotation runbook.*
 
-When the user explicitly insists a declarative layer be pipelined (e.g., "I want the perm-set in source control for audit"), allocate it as a child REQ with `complexity: trivial` so it gets the cheapest phase shape.
+When the user explicitly insists a config layer be pipelined (e.g., "I want the policy declaration in `Policies.md` for audit"), allocate it as a child REQ with `complexity: trivial` so it gets the cheapest phase shape.
 
 #### Step 1.8.3 — Propose the decomposition
 
 Build a child-REQ plan from the surviving (non-Setup-routed) layers. For each layer:
 
-- **Title**: `<Layer purpose> <object/feature>` — e.g., `Opportunity score Apex service`, `Opportunity score LWC widget`.
+- **Title**: `<Layer purpose> <object/feature>` — e.g., `Orders System API spec`, `Orders Process API flow`, `Orders MUnit suite`.
 - **Layer tag**: the layer key from Step 1.8.1 — recorded in the spec's `tags:` frontmatter.
-- **Complexity (Step 2.5 preview)**: `trivial` for any pipelined declarative layer; `small` for a single Apex class + its test, a single LWC + its Jest, a single Flow; `medium` if the layer introduces a new pattern (new trigger handler, new sObject, first integration); `large` only when the layer itself spans cross-domain work.
+- **Complexity (Step 2.5 preview)**: `trivial` for any pipelined config-only layer; `small` for a single flow + its MUnit suite, a single API spec + its APIkit binding, a single DataWeave module; `medium` if the layer introduces a new pattern (new connector config, new batch job, first integration with an upstream system); `large` only when the layer itself spans cross-API-tier work.
 - **Dependencies**: order layers by what consumes what. Typical chains:
-  - `custom-object` → `apex-service` → `apex-trigger` (if any) → `lwc-component` / `flow-screen`
-  - `apex-rest-callout` → `apex-service` (if the service wraps the callout) → consumer layer
-  - `data-cloud` DLO → DMO → activation → consumer
+  - `api-spec-system` → `mule-flow` (System API impl) → `api-spec-process` → `mule-flow` (Process API impl) → `api-spec-experience` → `mule-flow` (Experience API impl)
+  - `connector-config` → `mule-flow` (consumer) → `munit-suite` (test)
+  - `dataweave-module` → `mule-flow` (consumer) → `munit-suite` (test with mocked DW)
+  - `exchange-asset` (reusable connector / template) → consumer Mule app
 
 Surface the plan to the user in **interactive mode** (manual `/spec` invocation):
 
@@ -234,7 +234,7 @@ Allocation is **per-project, namespaced by `project.shortname` from `.adlc/confi
 
 1. Source the canonical allocator partial and request the next REQ id:
    ```bash
-   . .adlc/partials/id-counter.sh 2>/dev/null || . ~/.claude/skills/partials/id-counter.sh
+   . .adlc/partials/id-counter.sh 2>/dev/null || . ~/.claude/skills-mulesoft/partials/id-counter.sh
    REQ_ID=$(allocate_req)
    # `allocate_req` runs in $(...). `return 1` from the partial only exits the
    # subshell — guard the parent context (LESSON-015):
@@ -258,10 +258,10 @@ Apply this heuristic to the user's feature description plus any retrieval signal
 
 | Tier | Pick when |
 |---|---|
-| `trivial` | Single-file metadata change (picklist value, layout tweak, perm-set toggle, label edit). No Apex / Flow / LWC code change. No architectural decision. Author is confident from the description alone. |
-| `small` | ≤3 files. No new pattern introduced. Existing trigger handler / existing perm-set / existing sObject. 1 LWC + 1 Apex controller; or 1 Flow; or 1 perm-set spanning ≤2 objects. |
-| `medium` | 4-10 files OR introduces a new pattern (new trigger handler, new Named Credential, new custom sObject, first-time external service integration). |
-| `large` | >10 files OR cross-domain (Data Cloud + Apex + Agentforce, multi-repo, OmniStudio + Apex callable, B2B Commerce store). Always includes an ADR. |
+| `trivial` | Single-file config change (property value, doc:description tweak, pom.xml dependency bump, governance ruleset addition). No flow / DW / MUnit logic change. No architectural decision. Author is confident from the description alone. |
+| `small` | ≤3 files. No new pattern introduced. Existing connector config / existing flow / existing API spec. 1 sub-flow + 1 MUnit suite; or 1 DW module; or 1 API endpoint addition. |
+| `medium` | 4-10 files OR introduces a new pattern (new connector config, new batch job, first-time integration with an upstream system, new API instance registration in API Manager). |
+| `large` | >10 files OR cross-API-tier (System API + Process API + Experience API in one feature, multi-repo, new Exchange asset published, new MCP server exposed by Mule). Always includes an ADR. |
 
 Set `complexity:` in the spec's frontmatter. When in doubt, pick the **higher** tier — over-classifying costs minutes of orchestration; under-classifying can ship bad code.
 

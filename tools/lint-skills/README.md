@@ -41,10 +41,10 @@ a general markdown linter and NOT a general shell linter.
    ignored. The agent-only rule does not run against `<skill>/SKILL.md` files.
 6. **SF checklist source (`sf-checklist-source`)** — advisory. A SKILL.md
    that mentions Salesforce artifacts (`*.cls`, `*.trigger`, `*.flow-meta.xml`,
-   `*.permissionset-meta.xml`, `force-app/`, or `salesforce-rules.md`) but does
-   NOT source `partials/sf-quality-checklist.md` is flagged with one finding.
-   The catalog (`sf-skills-catalog.md`), the rules document
-   (`salesforce-rules.md`), the checklist itself, and every vendored sf-skill
+   `*.permissionset-meta.xml`, `force-app/`, or `mulesoft-rules.md`) but does
+   NOT source `partials/mule-quality-checklist.md` is flagged with one finding.
+   The catalog (`mule-skills-catalog.md`), the rules document
+   (`mulesoft-rules.md`), the checklist itself, and every vendored sf-skill
    under `skills/sf/` are excluded — those are content-as-rubric, not
    orchestrators. Reports at most one finding per SKILL.md.
 

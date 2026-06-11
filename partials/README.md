@@ -18,7 +18,7 @@ stdout into the skill prompt. Example: `ethos-include.sh` reads `ETHOS.md` and
 prints it. Skills invoke it like:
 
 ```
-!`sh .adlc/partials/<name>.sh 2>/dev/null || sh ~/.claude/skills/partials/<name>.sh`
+!`sh .adlc/partials/<name>.sh 2>/dev/null || sh ~/.claude/skills-mulesoft/partials/<name>.sh`
 ```
 
 The consumer-project-first fallback works whether or not `/init` has been run
@@ -34,7 +34,7 @@ behavior.
 Skills invoke a model-2 partial like:
 
 ```bash
-. .adlc/partials/<name>.sh 2>/dev/null || . ~/.claude/skills/partials/<name>.sh
+. .adlc/partials/<name>.sh 2>/dev/null || . ~/.claude/skills-mulesoft/partials/<name>.sh
 adlc_<name>_function; result=$?
 ```
 

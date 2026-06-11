@@ -30,12 +30,12 @@ For everything else — including every **End-of-phase log** block below, every 
 
 ## Ethos
 
-!`sh .adlc/partials/ethos-include.sh 2>/dev/null || sh ~/.claude/skills/partials/ethos-include.sh`
+!`sh .adlc/partials/ethos-include.sh 2>/dev/null || sh ~/.claude/skills-mulesoft/partials/ethos-include.sh`
 
 ## Context
 
-- SF quality checklist: !`cat .adlc/partials/sf-quality-checklist.md 2>/dev/null || cat ~/.claude/skills/partials/sf-quality-checklist.md 2>/dev/null || echo "No sf-quality-checklist found"`
-- Sprint dashboard: !`sh ~/.claude/skills/tools/sprint-dashboard/launch.sh`
+- Mule quality checklist: !`cat .adlc/partials/mule-quality-checklist.md 2>/dev/null || cat ~/.claude/skills-mulesoft/partials/mule-quality-checklist.md 2>/dev/null || echo "No mule-quality-checklist found"`
+- Sprint dashboard: !`sh ~/.claude/skills-mulesoft/tools/sprint-dashboard/launch.sh`
 
 ## Arguments
 
@@ -230,7 +230,7 @@ Each phase below has a one-line **Gate** reminder. The full protocol above appli
 
 ```sh
 sh .adlc/tools/reconcile-pipeline-state/reconcile.sh --verbose 2>&1 \
-  || sh ~/.claude/skills/tools/reconcile-pipeline-state/reconcile.sh --verbose 2>&1
+  || sh ~/.claude/skills-mulesoft/tools/reconcile-pipeline-state/reconcile.sh --verbose 2>&1
 ```
 
 (Two-level fallback per ADR-2: prefer the consumer-vendored copy, fall back to the toolkit copy.) If the reconciler heals anything, log it in the run header so the user knows. A non-zero exit from the reconciler means at least one ghost couldn't be healed (typically: merged PR not findable) — surface that as a warning but do NOT halt this `/proceed` run on it; the current REQ may not be the affected one.
@@ -335,7 +335,7 @@ Now that validation has passed, create the per-repo worktrees and migrate the pi
    STATE_FILE="<primary-repo-path>/.adlc/specs/<spec-dir-name>/pipeline-state.json"
    # all subsequent reads/writes go via $STATE_FILE
    ```
-   The worktree itself is for the *code* (Apex, LWC, perm sets, etc.). The `.adlc/` artifacts — pipeline state, requirement.md edits, task files, status updates — live in the main checkout's working tree, where they survive worktree removal and are immediately visible to the dashboard's scan of `<root>/.adlc/specs/`.
+   The worktree itself is for the *code* (Mule flows, DataWeave, MUnit, properties, pom.xml, etc.). The `.adlc/` artifacts — pipeline state, requirement.md edits, task files, status updates — live in the main checkout's working tree, where they survive worktree removal and are immediately visible to the dashboard's scan of `<root>/.adlc/specs/`.
 
    **Why no copy at all (not even a mirror):** dual-write doubles the failure surface (silent divergence when only one side is written) and serves no purpose — the dashboard already prefers main-checkout state files (server.js prefers a stateful main-checkout candidate over a worktree candidate via `snapshotProject`). A single source of truth eliminates the entire class of "which file is the dashboard reading?" bugs.
 
@@ -408,7 +408,7 @@ Dispatch all selected agents in a **single assistant message**. In cross-repo mo
 
 The six agents match the dimensions covered by `/review` (correctness, quality, architecture, test coverage, security) plus the reflector self-assessment. Each reviewer is responsible for producing its own candidate findings — there is no advisory pre-pass.
 
-**Inline-context rule (REQ-E)**: every agent below receives the **content** of `conventions.md`, `architecture.md`, and (when relevant) `salesforce-rules.md` inlined into its prompt — not file paths. Step 0 already loaded these into your context; pass them through. Avoiding per-agent re-reads saves ~3-5s per agent per phase (≈ 1-2 min/run on the full 6-agent panel).
+**Inline-context rule (REQ-E)**: every agent below receives the **content** of `conventions.md`, `architecture.md`, and (when relevant) `mulesoft-rules.md` inlined into its prompt — not file paths. Step 0 already loaded these into your context; pass them through. Avoiding per-agent re-reads saves ~3-5s per agent per phase (≈ 1-2 min/run on the full 6-agent panel).
 
 Each agent dispatch prompt should include a `## Project context (verbatim)` block with the markdown bodies, followed by the agent-specific instructions.
 
@@ -416,8 +416,8 @@ Each agent dispatch prompt should include a `## Project context (verbatim)` bloc
 2. **correctness-reviewer** agent — repo id, worktree path, changed files, diff, **inlined `conventions.md` content**. "Report findings only. Do not apply fixes."
 3. **quality-reviewer** agent — same inputs. "Report findings only. Do not apply fixes."
 4. **architecture-reviewer** agent — repo id, worktree path, changed files, diff, **inlined `architecture.md` content**, **plus a summary of the other touched repos' changes** (so it can flag cross-repo contract breaks). "Report findings only. Do not apply fixes."
-5. **test-auditor** agent — repo id, worktree path, changed files, diff, **inlined `conventions.md` content + `.adlc/config.yml` `salesforce.coverage` block**. "Audit test coverage only for the diff under review. Apply the three-tier policy in REQ-A. Report findings only. Do not apply fixes."
-6. **security-auditor** agent — repo id, worktree path, changed files, diff, **inlined `conventions.md` content + `salesforce-rules.md` content (Security & Permissions sections)**. "Audit security posture only for the diff under review. Report findings only. Do not apply fixes."
+5. **test-auditor** agent — repo id, worktree path, changed files, diff, **inlined `conventions.md` content + `.adlc/config.yml` `mulesoft.coverage` block**. "Audit test coverage only for the diff under review. Apply the three-tier policy in REQ-A. Report findings only. Do not apply fixes."
+6. **security-auditor** agent — repo id, worktree path, changed files, diff, **inlined `conventions.md` content + `mulesoft-rules.md` content (Security & Permissions sections)**. "Audit security posture only for the diff under review. Report findings only. Do not apply fixes."
 
 **Subagent mode** — sequential inline review:
 For each touched repo, run the reflector checklist, then correctness, quality, architecture (with cross-repo context), test-auditor, and security-auditor checklists sequentially in your own context. Use the criteria from the agent definitions in `~/.claude/agents/`. Do NOT dispatch sub-agents.
@@ -432,100 +432,78 @@ For each touched repo, run the reflector checklist, then correctness, quality, a
 
 **Step D — Re-verify (conditional)**: Re-run ONLY the 5 reviewer agents (not reflector) if Critical or must-fix Major items were fixed — up to 1 confirmation loop. Skip if only minor fixes were applied. Scope re-verify to the (repo, dimension) pairs that had fixes: e.g., if correctness fixes landed only in the api repo, rerun correctness-reviewer for that repo only. In subagent mode, re-run the corresponding reviewer checklists inline.
 
-**Step E — Platform validate (Salesforce ground-truth gate)**: Static review reasons about the code; the platform compiler is the only oracle that catches metadata-shape errors, Apex compile errors, missing fields, malformed FlexiPage XML, UI Bundle dist/ omissions, and feature-flag-gated metadata that exists in docs but not your org. Run a server-side validate against the lowest-tier configured org **after** static fixes have been applied and **before** opening a PR. This step is mandatory whenever the project is a Salesforce project and at least one touched repo has Salesforce metadata in its diff — it is NOT gated by `complexity` (a `trivial` change can still ship broken metadata).
+**Step E — Platform validate (MuleSoft ground-truth gate)**: Static review reasons about the code; the platform build + governance scan is the only oracle that catches `pom.xml` malformation, Mule schema validation errors, MUnit failures, governance ruleset violations, and policy-declaration drift against the live API instance. Run the build + scan + (when configured) DX MCP / Platform MCP live-state checks **after** static fixes have been applied and **before** opening a PR. This step is mandatory whenever the project is a MuleSoft project and at least one touched repo has Mule artifacts in its diff — it is NOT gated by `complexity` (a `trivial` change can still ship broken XML or break a contract).
 
-**CLI verb depends on the test level.** `sf project deploy validate` requires Apex tests — its `--test-level` allowlist is `RunAllTestsInOrg | RunLocalTests | RunSpecifiedTests | RunRelevantTests` and it rejects `NoTestRun` outright. For the metadata-only carve-out (no Apex in diff) we use `sf project deploy start --dry-run --test-level NoTestRun`, which exercises the same server-side compile/shape checks but does NOT save to the org. Both verbs return a validation id usable for `sf project deploy report` and (via `quick`) for production promotion.
+**The gate has three sub-stages**, each with its own CLI verb. Stages are skipped per the carve-out rules (no Mule artifacts in diff → entire gate is `n/a`):
 
-For each touched repo whose diff contains Salesforce metadata (any path under `force-app/`, or whatever `salesforce.workspace:` is set to in `.adlc/config.yml`), run inside that repo's worktree:
+1. **Build**: `mvn validate compile munit:test` — pom.xml well-formed, schemas resolve, MUnit suite passes. Catches XML schema errors, undefined connector configs, unresolvable property placeholders.
+2. **Governance scan** (when `mulesoft.governance.api_manager_enabled: true` AND `mulesoft.governance.governance_ruleset` is set): `anypoint-cli-v4 governance:validate --rulesets <ruleset> src/main/resources/api/*.{raml,json,yaml}`. Catches ruleset violations on touched API specs.
+3. **Live policy-state verification** (when `mulesoft.governance.api_manager_enabled: true` AND a Policies.md exists for this REQ): Platform MCP `view_api_instance_policies` for each declared API instance. Confirms the live state matches the `Policies.md` declaration. Drift is a Critical finding.
+
+For each touched repo whose diff contains Mule artifacts (any path under `src/main/mule/`, `src/main/resources/api/`, `src/test/munit/`, `dw/`, `pom.xml`, `mule-artifact.json`, `*.properties`), run inside that repo's worktree:
 
 ```sh
-# Resolve the validation org. Order: salesforce.validate_org → orgs.sandbox → orgs.scratch.
-ALIAS=$(awk '/^[[:space:]]*salesforce:/{f=1} f && /^[[:space:]]*validate_org:/{print $2; exit}' .adlc/config.yml | tr -d '"')
-[ -z "$ALIAS" ] && ALIAS=$(awk '/^[[:space:]]*orgs:/{f=1} f && /^[[:space:]]*sandbox:/{print $2; exit}' .adlc/config.yml | tr -d '"')
-[ -z "$ALIAS" ] && ALIAS=$(awk '/^[[:space:]]*orgs:/{f=1} f && /^[[:space:]]*scratch:/{print $2; exit}' .adlc/config.yml | tr -d '"')
-
-# Resolve --test-level by reusing /canary Step 2b's diff-aware logic.
-#
-# Metadata-only carve-out (per salesforce-rules.md "Unit Testing Requirements"): if the diff
-# only touches custom objects/fields, perm sets, layouts, FlexiPages, Flows-without-Apex,
-# static resources, etc. — i.e. NO `.cls`/`.trigger` files — a test class is NOT required.
-# Reviewers MUST NOT flag missing tests. NoTestRun is illegal for `deploy validate`, so we
-# switch to `deploy start --dry-run --test-level NoTestRun` for the metadata-only path.
-APEX_TOUCHED=$(git diff --name-only "origin/${integrationBranch:-main}...HEAD" | grep -E '\.(cls|trigger)$' | grep -vE '(Test|_Test)\.cls$' || true)
-if [ -z "$APEX_TOUCHED" ]; then TEST_LEVEL="NoTestRun"; else TEST_LEVEL="RunLocalTests"; fi
-
-WORKSPACE=$(awk '/^[[:space:]]*salesforce:/{f=1} f && /^[[:space:]]*workspace:/{print $2; exit}' .adlc/config.yml | tr -d '"')
-WORKSPACE=${WORKSPACE:-force-app}
-
-if [ "$TEST_LEVEL" = "NoTestRun" ]; then
-  # Metadata-only path. `sf project deploy validate` rejects NoTestRun, so use
-  # `start --dry-run` — same server-side checks, nothing saved to the org.
-  sf project deploy start \
-    --dry-run \
-    --target-org "$ALIAS" \
-    --source-dir "$WORKSPACE" \
-    --test-level NoTestRun \
-    --wait 5 \
-    --json
-else
-  # Apex in diff — full validate with the resolved test level.
-  sf project deploy validate \
-    --target-org "$ALIAS" \
-    --source-dir "$WORKSPACE" \
-    --test-level "$TEST_LEVEL" \
-    --wait 5 \
-    --json
+# Carve-out detector
+MULE_TOUCHED=$(git diff --name-only "origin/${integrationBranch:-main}...HEAD" | grep -E '^(src/main/mule/|src/main/resources/api/|src/test/munit/|dw/|.*\.dwl$|pom\.xml$|mule-artifact\.json$|.*\.properties$)' || true)
+if [ -z "$MULE_TOUCHED" ]; then
+  # No Mule artifacts in diff — entire gate is n/a; skip.
+  echo "phase5.platformValidate[<repo-id>] = n/a (no Mule artifacts in diff)"
+  exit 0
 fi
 ```
 
-**Wait cap = 5 minutes (hard cap, do not raise).** Each REQ in this pipeline is sized to be a small, isolated change set; a healthy validate against a sandbox should return in well under that. If the validate has not finished when `--wait 5` expires, the `sf` CLI returns a non-terminal "still running" response and the **pipeline must NOT block here** — capture the validation id, mark the gate as `running`, and continue to Phase 6. The validate keeps executing server-side and will be reconciled in Phase 7.
+**Sub-stage 1: Build**
 
 ```sh
-# Capture the JSON; --wait 5 will return either a terminal status OR a still-running response.
-# Verb is conditional on TEST_LEVEL — `validate` rejects NoTestRun, so the metadata-only
-# path uses `start --dry-run` instead. Both return the same JSON shape with `.result.id`.
-if [ "$TEST_LEVEL" = "NoTestRun" ]; then
-  VALIDATE_JSON=$(sf project deploy start \
-    --dry-run \
-    --target-org "$ALIAS" \
-    --source-dir "$WORKSPACE" \
-    --test-level NoTestRun \
-    --wait 5 \
-    --json 2>&1 || true)
-else
-  VALIDATE_JSON=$(sf project deploy validate \
-    --target-org "$ALIAS" \
-    --source-dir "$WORKSPACE" \
-    --test-level "$TEST_LEVEL" \
-    --wait 5 \
-    --json 2>&1 || true)
+# Wait cap = 5 minutes (hard cap, do not raise). Healthy small-REQ MUnit suites
+# return in well under that. Long-running suites continue and are reconciled
+# in Phase 7.
+timeout 300 mvn -q validate compile munit:test --batch-mode 2>&1 | tee .adlc/.cache/build-${REPO_ID}.log
+BUILD_RC=${PIPESTATUS[0]}
+```
+
+**Sub-stage 2: Governance scan** (only when `mulesoft.governance.api_manager_enabled: true` AND ruleset configured AND API specs touched)
+
+```sh
+RULESET=$(awk '/^[[:space:]]*governance_ruleset:/{sub(/^[[:space:]]*governance_ruleset:[[:space:]]*/,""); gsub(/["'\'']/,""); sub(/[[:space:]]*#.*$/,""); print; exit}' .adlc/config.yml)
+API_SPEC_TOUCHED=$(echo "$MULE_TOUCHED" | grep -E '^src/main/resources/api/' || true)
+
+if [ -n "$RULESET" ] && [ -n "$API_SPEC_TOUCHED" ]; then
+  GOVERNANCE_RC=0
+  for spec in src/main/resources/api/*.{raml,json,yaml}; do
+    [ -f "$spec" ] || continue
+    if ! anypoint-cli-v4 governance:validate --rulesets "$RULESET" "$spec" --output json > .adlc/.cache/governance-${REPO_ID}-$(basename "$spec").json 2>&1; then
+      GOVERNANCE_RC=1
+    fi
+  done
 fi
+```
 
-VALIDATION_ID=$(echo "$VALIDATE_JSON" | jq -r '.result.id // empty')
-STATUS=$(echo "$VALIDATE_JSON" | jq -r '.result.status // empty')
+**Sub-stage 3: Live policy-state verification** (only when `mulesoft.governance.api_manager_enabled: true` AND `Policies.md` exists for this REQ)
 
-# If sf timed out the wait, status will be one of: Pending | InProgress | Queued.
-# Treat those as "running" — DO NOT loop and DO NOT halt.
-case "$STATUS" in
-  Succeeded)             OUTCOME="passed" ;;
-  Failed|Canceled)       OUTCOME="failed" ;;
-  Pending|InProgress|Queued|"") OUTCOME="running" ;;
-  *)                     OUTCOME="running" ;;
-esac
+For each API instance declared in `Policies.md`, call Platform MCP `view_api_instance_policies` and compare the live applied set against the declared set. Drift detected → Critical finding. This is the analogue of the SFDC platform validate's "what's actually in the org" oracle, scoped to API Manager policy state.
+
+```
+# Via Platform MCP (in agent context, not shell)
+view_api_instance_policies(apiInstanceId: <id-from-Policies.md>) →
+  compare against Policies.md "Policies applied" table →
+  if drift, write phase5.platformValidate[<repo-id>].liveStateDrift = [...]
 ```
 
 **Outcome handling:**
 
-1. **Clean validate** (`OUTCOME=passed`: status `Succeeded`, `checkOnly=true`, no component failures, no test failures): write `phase5.platformValidate[<repo-id>] = { status: "passed", validationId: <id>, alias: <alias>, testLevel: <level>, runAt: <ts> }` to `pipeline-state.json` and proceed.
-2. **Validation failed** (`OUTCOME=failed`: compile errors, missing component, FLS error, malformed metadata, test failure): treat every failure entry as a **Critical finding** and loop back to Step C with the platform's error report inlined. Up to **2 retries** of the C → D → E cycle. Each retry MUST run all of Steps C → D → E in order — do not skip D between attempts because the platform errors only surfaced in E. After the second failed retry, the failure is legitimate halt #2 (same handling as reflector questions): stop, surface the validation id, the failing components, the test failures, and the verbatim platform error to the user.
-3. **Validate still running after 5-min cap** (`OUTCOME=running`): write `phase5.platformValidate[<repo-id>] = { status: "running", validationId: <id>, alias: <alias>, testLevel: <level>, startedAt: <ts>, deadline: <ts+30m> }` to `pipeline-state.json`. Emit a one-line WARN: `WARN: platform validate did not return within 5m — id <id> still running on $ALIAS; pipeline continues. Phase 7 will reconcile.` Continue to Phase 6. **Do NOT loop, do NOT halt, do NOT raise --wait.** Phase 7 (PR Cleanup & CI) MUST poll `sf project deploy report --target-org "$ALIAS" --job-id "$VALIDATION_ID" --json` once before merge: if `Succeeded`, flip the gate to `passed`; if `Failed`, treat the failures as blockers on the PR and post them as a comment; if still `InProgress`, surface that on the PR and let CI carry the gate.
-4. **No validation org configured** (`salesforce.validate_org`, `orgs.sandbox`, and `orgs.scratch` all absent): record `phase5.platformValidate[<repo-id>] = { status: "skipped", reason: "no validation org configured" }` in `pipeline-state.json`. Do NOT proceed silently — surface a one-line warning in the Phase 5 end-of-phase log: `WARN: platform validate skipped — configure salesforce.validate_org or orgs.sandbox in .adlc/config.yml to enable Salesforce ground-truth gate.` This is intentional (a hard fail would block local-only projects), but must NEVER be a silent skip.
-5. **No Salesforce metadata in this repo's diff** (the touched paths are all docs/tests/non-SF code): mark `phase5.platformValidate[<repo-id>] = { status: "n/a", reason: "no SF metadata in diff" }` and proceed. This is the only legitimate quiet skip.
-6. **`sf` CLI absent or unauthenticated**: surface a Critical finding immediately — this is a setup gap, not a code problem. Do NOT loop. `phase5.platformValidate[<repo-id>] = { status: "tooling-error", reason: "<error>" }`. The user fixes their environment and reruns `/proceed`.
+1. **All three sub-stages pass** (build green; governance scan green; live state matches declaration): write `phase5.platformValidate[<repo-id>] = { status: "passed", buildRc: 0, governanceRc: 0, liveStateMatch: true, runAt: <ts> }` to `pipeline-state.json` and proceed.
+2. **Build fails** (compile errors, schema validation errors, MUnit test failures): treat every failure entry as a **Critical finding** and loop back to Step C with the build log inlined. Up to **2 retries** of the C → D → E cycle. After the second failed retry, the failure is legitimate halt #2: stop, surface the build log + the failing flow / DW / MUnit, and the verbatim Maven error to the user.
+3. **Governance scan fails** (ruleset violations on a touched API spec): treat as a Critical finding and loop back to Step C up to 2 retries. After the second failed retry, halt as legitimate halt #2 with the governance report attached.
+4. **Live state drift detected** (Policies.md declares X but Platform MCP `view_api_instance_policies` returns Y): treat as a Critical finding. The remediation is either (a) update `Policies.md` to match reality if reality is correct, or (b) re-apply the missing policies via Platform MCP `apply_policy_to_instance` BEFORE merging. Halt as legitimate halt #2 if the user must decide.
+5. **Build still running after 5-min cap**: write `phase5.platformValidate[<repo-id>] = { status: "running", reason: "mvn munit:test exceeded 5m wait", startedAt: <ts>, deadline: <ts+30m> }` to `pipeline-state.json`. Emit a one-line WARN and continue to Phase 6. **Do NOT loop, do NOT halt.** Phase 7 (PR Cleanup & CI) MUST re-run `mvn munit:test` once before merge: if green, flip the gate to `passed`; if red, treat as a blocker on the PR.
+6. **No `pom.xml` / `anypoint-cli-v4` available** (tooling absent): record `phase5.platformValidate[<repo-id>] = { status: "tooling-error", reason: "<missing tool>" }`. Do NOT loop. The user fixes their environment and reruns `/proceed`.
+7. **No Mule artifacts in this repo's diff**: mark `phase5.platformValidate[<repo-id>] = { status: "n/a", reason: "no Mule artifacts in diff" }` and proceed. This is the only legitimate quiet skip.
+8. **Governance disabled / no API specs touched**: skip sub-stages 2-3 silently; sub-stage 1 (build) still applies.
 
-**Why this gate exists**: every static reviewer (correctness, quality, architecture, test-auditor, security) reasons about source code in isolation. None of them can detect: an `.app-meta.xml` extension that should be `.uibundle-meta.xml`; a UI Bundle that ships without `dist/`; a permset referencing a field that exists only on a feature-flagged Edition; a FlexiPage with an invalid `template` ref; an Apex class compiled against a newer API version than the org supports; an OmniStudio component referencing a missing DataPack. The platform validate is the ground-truth oracle. With the 5-minute cap, a healthy small-REQ validate finishes inline; a slow run continues server-side and is reconciled in Phase 7 instead of blocking the agent.
+**Why this gate exists**: every static reviewer (correctness, quality, architecture, test-auditor, security) reasons about source code in isolation. None of them can detect: a `pom.xml` mule-maven-plugin version mismatch; a `mule-artifact.json` listing a secure-property that the secure-properties-config doesn't reference; a flow XML referencing a connector config defined in a deleted globals.xml; an MUnit suite that compiles but mocks the wrong upstream signature; a governance ruleset that just shipped a new rule the spec violates; an API Manager policy that was hand-applied via UI and isn't in `Policies.md`. The build + governance scan + live policy verification is the ground-truth oracle. With the 5-minute cap, a healthy small-REQ build finishes inline; a slow run continues and is reconciled in Phase 7 instead of blocking the agent.
 
-**End-of-phase log**: Emit the combined verify summary across repos — per-repo findings, dedupe count, how many fixed, any deferred — followed by a per-repo `Platform validate: ✓ passed (id <validation-id>) | ⏳ running (id <validation-id>, deferred to Phase 7) | ⚠ skipped (no org) | ✗ failed (N components, M tests)` line. If reflector surfaced user-facing questions, halt here (legitimate halt #2). If platform validate failed twice, halt here (also legitimate halt #2). A `running` outcome is NOT a halt — it continues to Phase 6.
+**End-of-phase log**: Emit the combined verify summary across repos — per-repo findings, dedupe count, how many fixed, any deferred — followed by a per-repo `Platform validate: ✓ passed (build+governance+livestate) | ⏳ running (mvn deferred to Phase 7) | ⚠ skipped (governance not enabled) | ✗ failed (build / governance / livestate)` line. If reflector surfaced user-facing questions, halt here (legitimate halt #2). If any sub-stage failed twice, halt here (also legitimate halt #2). A `running` outcome is NOT a halt — it continues to Phase 6.
 
 ---
 
@@ -555,20 +533,22 @@ content, verify cross-repo contract consistency, push fixups in the owning
 worktree if needed, wait for `gh pr checks` to go green. End-of-phase log:
 one line per PR, then "All N PRs ready for merge".
 
-**Step 7a — Reconcile deferred platform-validate (per repo with `phase5.platformValidate[<repo>].status == "running"`).** Phase 5's validate uses a 5-min wait cap; long-running validates carry over here. For each such repo:
+**Step 7a — Reconcile deferred platform-validate (per repo with `phase5.platformValidate[<repo>].status == "running"`).** Phase 5's build uses a 5-min wait cap; long-running MUnit suites carry over here. For each such repo, re-run the build inside the worktree:
 
 ```sh
-VID=$(jq -r ".repos[\"$REPO\"].phase5.platformValidate.validationId" pipeline-state.json)
-ALIAS=$(jq -r ".repos[\"$REPO\"].phase5.platformValidate.alias" pipeline-state.json)
+REPO_PATH=$(jq -r ".repos[\"$REPO\"].path" pipeline-state.json)
+WORKTREE=$(jq -r ".repos[\"$REPO\"].worktree" pipeline-state.json)
 
-REPORT=$(sf project deploy report --target-org "$ALIAS" --job-id "$VID" --json 2>&1 || true)
-RSTATUS=$(echo "$REPORT" | jq -r '.result.status // empty')
+cd "$WORKTREE"
+mvn -q validate compile munit:test --batch-mode > .adlc/.cache/build-${REPO}-phase7.log 2>&1
+RSTATUS=$?
 ```
 
 Outcome handling:
-- `Succeeded` → flip `phase5.platformValidate[<repo>].status` to `passed`. No PR action needed beyond the success line in the per-PR log.
-- `Failed` / `Canceled` → treat as a blocker. Post the failing components + test failures as a PR comment, mark the PR as `blocked`, and halt this repo's promotion. Do NOT auto-loop back to Phase 5; the user decides whether to re-run `/proceed` or fix-forward.
-- Still `InProgress` / `Pending` after a single check → leave the gate as `running`, post a PR comment with the validation id and the `sf project deploy report --job-id <id>` command, and let CI / the next manual check carry it. Do NOT poll in a loop; one read per pass.
+- `RSTATUS=0` → flip `phase5.platformValidate[<repo>].status` to `passed`. No PR action needed beyond the success line in the per-PR log.
+- `RSTATUS!=0` → treat as a blocker. Post the failing flows / MUnit assertions / DW errors as a PR comment, mark the PR as `blocked`, and halt this repo's promotion. Do NOT auto-loop back to Phase 5; the user decides whether to re-run `/proceed` or fix-forward.
+- If a separately-tracked governance scan was deferred (`phase5.platformValidate[<repo>].governanceStatus == "running"`), re-run `anypoint-cli-v4 governance:validate` once. Same outcome handling.
+- Live policy-state drift checks (Platform MCP `view_api_instance_policies`) are fast — they do NOT defer. If they were skipped in Phase 5 because the API instance wasn't yet registered (e.g., greenfield API in a new environment), re-attempt once here.
 
 This step replaces the Phase 5 "wait until validate finishes" behavior — it's the only place the pipeline reconciles a deferred validate. Skip the step entirely when no repo has a deferred validate.
 

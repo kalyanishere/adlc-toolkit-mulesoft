@@ -10,7 +10,7 @@ You are a sprint orchestrator that launches multiple `/proceed` pipelines in par
 
 ## Ethos
 
-!`sh .adlc/partials/ethos-include.sh 2>/dev/null || sh ~/.claude/skills/partials/ethos-include.sh`
+!`sh .adlc/partials/ethos-include.sh 2>/dev/null || sh ~/.claude/skills-mulesoft/partials/ethos-include.sh`
 
 ## Context
 
@@ -18,7 +18,7 @@ You are a sprint orchestrator that launches multiple `/proceed` pipelines in par
 - Existing worktrees: !`git worktree list 2>/dev/null || echo "Not a git repo"`
 - Available specs: !`ls .adlc/specs/ 2>/dev/null || echo "No specs found"`
 - Pipeline states: !`find .adlc/specs -name pipeline-state.json 2>/dev/null`
-- Sprint dashboard: !`sh ~/.claude/skills/tools/sprint-dashboard/launch.sh`
+- Sprint dashboard: !`sh ~/.claude/skills-mulesoft/tools/sprint-dashboard/launch.sh`
 
 ## Input
 
@@ -52,7 +52,7 @@ If the user passed `--workflow` but the `Workflow` tool is unavailable, say so e
 
 1. **Resolve the script path** with the standard two-level fallback (ADR-2): prefer the consumer-vendored copy, fall back to the toolkit copy.
    - First choice: `.adlc/workflows/adlc-sprint.workflow.js` (present after the consumer ran `/init`).
-   - Fallback: `~/.claude/skills/workflows/adlc-sprint.workflow.js` (always present via the skills symlink).
+   - Fallback: `~/.claude/skills-mulesoft/workflows/adlc-sprint.workflow.js` (always present via the skills symlink).
    - Use whichever path exists; if neither exists, report the missing script and fall back to `legacy`.
 2. **Invoke the `Workflow` tool** with the resolved script path and the documented args. The script itself is the orchestration engine (ADR-3) — this dispatcher is the only place the `Workflow` tool is invoked:
    ```
@@ -105,7 +105,7 @@ a no-op:
 
 ```sh
 sh .adlc/tools/reconcile-pipeline-state/reconcile.sh --verbose 2>&1 \
-  || sh ~/.claude/skills/tools/reconcile-pipeline-state/reconcile.sh --verbose 2>&1
+  || sh ~/.claude/skills-mulesoft/tools/reconcile-pipeline-state/reconcile.sh --verbose 2>&1
 ```
 
 (The two-level fallback mirrors ADR-2: prefer the consumer-vendored copy,
