@@ -839,7 +839,10 @@ fi
 
 pw_specs=$(awk '/^playwright_specs:/ { sub(/^playwright_specs:[[:space:]]*/, ""); gsub(/["'\'']/, ""); sub(/[[:space:]]*#.*$/, ""); print; exit }' .adlc/config.yml 2>/dev/null)
 if [ -z "$pw_specs" ]; then
-  echo "Skipped Playwright harness scaffold — playwright_specs is not declared in .adlc/config.yml."
+  # Silent skip — most MuleSoft projects (and SFDC projects with playwright_specs
+  # disabled) don't need the harness. Set ADLC_INIT_VERBOSE=1 for the audit line.
+  [ "${ADLC_INIT_VERBOSE:-0}" = "1" ] && echo "Skipped Playwright harness scaffold — playwright_specs is not declared in .adlc/config.yml."
+  :
 else
   # 1. playwright.config.ts at repo root
   if [ ! -f playwright.config.ts ]; then
